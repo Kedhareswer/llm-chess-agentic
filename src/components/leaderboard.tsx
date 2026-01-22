@@ -13,6 +13,7 @@ export function Leaderboard() {
   const [starting, setStarting] = useState(false);
   const [geminiKey, setGeminiKey] = useState("");
   const [geminiSaveMessage, setGeminiSaveMessage] = useState<string | null>(null);
+  const [geminiSaving, setGeminiSaving] = useState(false);
 
   useEffect(() => {
     async function fetchLeaderboard() {
@@ -27,7 +28,7 @@ export function Leaderboard() {
   }, []);
 
   async function handleSaveGeminiKey() {
-    setSaving(true);
+    setGeminiSaving(true);
     setGeminiSaveMessage(null);
     try {
       const res = await fetch("/api/tournament/gemini-key", {
@@ -43,7 +44,7 @@ export function Leaderboard() {
     } catch (e: any) {
       setGeminiSaveMessage(e.message || "Failed to save Gemini key");
     } finally {
-      setSaving(false);
+      setGeminiSaving(false);
     }
   }
 
