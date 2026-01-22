@@ -7,9 +7,8 @@ import { calculateNewElo, outcomeFromResult } from "./elo";
 import type { Game } from "@/db/schema";
 import { getGroqApiKey, getGeminiApiKey } from "@/lib/groq-key-store";
 
-function sleep(ms: number) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+// Track consecutive timeouts per game/side (white/black). Two strikes => forfeit.
+const timeoutWarnings: Map<string, { white: number; black: number }> = new Map();
 
 export async function processGame(game: Game): Promise<void> {
   // Re-fetch game to check if still active (protect against concurrent ticks)
@@ -26,7 +25,7 @@ export async function processGame(game: Game): Promise<void> {
 
   const groqApiKey = getGroqApiKey();
   const geminiApiKey = getGeminiApiKey();
-  console.log(`[processGame] Game ${currentGame.id}, groqApiKey present: ${!!groqApiKey}`);
+  console.log(`[processGame] Game ${currentGame.id}, groqApiKey present: ${!!groqApiKey}, geminiKey present: ${!!geminiApiKey}`);
 
   const turn = getTurn(currentGame.fen);
   const modelId = turn === "w" ? currentGame.whiteId : currentGame.blackId;
@@ -44,41 +43,56 @@ export async function processGame(game: Game): Promise<void> {
 
   let moveResponse;
   let errorContext: string | undefined;
+  let timedOutOrFailed = false;
 
-  // Rate-limit / thinking pause to respect Groq throughput
-  await sleep(2000);
+  // Single attempt with 10s timeout enforced in ai.ts
+  try {
+    moveResponse = await requestMove(modelId, {
+      fen: currentGame.fen,
+      color: color as "white" | "black",
+      legalMoves,
+      lastMoves: recentMoves.map(m => m.moveSan),
+      errorContext,
+    }, 1, { groqApiKey, geminiApiKey });
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      moveResponse = await requestMove(modelId, {
-        fen: currentGame.fen,
-        color: color as "white" | "black",
-        legalMoves,
-        lastMoves: recentMoves.map(m => m.moveSan),
-        errorContext,
-      }, 3, { groqApiKey, geminiApiKey });
-
-      if (validateMove(currentGame.fen, moveResponse.move)) {
-        break;
-      }
-
+    if (moveResponse && !validateMove(currentGame.fen, moveResponse.move)) {
       errorContext = `"${moveResponse.move}" is illegal. Legal moves: ${legalMoves.join(", ")}`;
       moveResponse = null;
-
-    } catch (err) {
-      console.error(`[processGame] Attempt ${attempt} failed for ${modelId}:`, err);
-      if (attempt === 3) {
-        // Forfeit
-        console.error(`[processGame] Forfeiting game ${currentGame.id} due to repeated failures`);
-        await forfeitGame(currentGame, modelId);
-        return;
-      }
+      timedOutOrFailed = true;
     }
+  } catch (err) {
+    console.error(`[processGame] Move request failed for ${modelId}:`, err);
+    moveResponse = null;
+    timedOutOrFailed = true;
   }
 
+  // Handle timeout/invalid: warn once, forfeit on second consecutive failure for that side
   if (!moveResponse) {
-    await forfeitGame(currentGame, modelId);
+    const counts = timeoutWarnings.get(currentGame.id) || { white: 0, black: 0 };
+    const key = color === "white" ? "white" : "black";
+    counts[key] += 1;
+    timeoutWarnings.set(currentGame.id, counts);
+    console.warn(`[processGame] Timeout/invalid for ${modelId}. Warnings ${counts.white}/${counts.black}`);
+
+    if (counts[key] >= 2) {
+      console.error(`[processGame] Forfeiting ${modelId} due to repeated timeout/invalid`);
+      await forfeitGame(currentGame, modelId);
+      timeoutWarnings.delete(currentGame.id);
+    }
     return;
+  } else {
+    // Successful move clears warning for that side
+    const counts = timeoutWarnings.get(currentGame.id);
+    if (counts) {
+      const key = color === "white" ? "white" : "black";
+      counts[key] = 0;
+      // If both zero, remove entry
+      if (counts.white === 0 && counts.black === 0) {
+        timeoutWarnings.delete(currentGame.id);
+      } else {
+        timeoutWarnings.set(currentGame.id, counts);
+      }
+    }
   }
 
   // Apply move

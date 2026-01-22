@@ -219,11 +219,11 @@ export function Leaderboard() {
         />
         <button
           onClick={handleSaveGeminiKey}
-          disabled={saving || !geminiKey.trim()}
+          disabled={geminiSaving || !geminiKey.trim()}
           className="w-full border-2 border-black bg-black text-white text-xs py-1 disabled:opacity-50"
           data-testid="save-gemini-key"
         >
-          {saving ? "Saving..." : "Save Gemini Key"}
+          {geminiSaving ? "Saving..." : "Save Gemini Key"}
         </button>
 
         {groqModels.length > 0 && (
