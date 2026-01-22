@@ -13,6 +13,7 @@ export function GameGrid() {
   const [games, setGames] = useState<GameWithModels[]>([]);
   const [destroying, setDestroying] = useState(false);
   const [info, setInfo] = useState<string | null>(null);
+  const [tickInfo, setTickInfo] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState<string>("00:00");
 
   function formatElapsed(ms: number) {
@@ -54,6 +55,23 @@ export function GameGrid() {
     }
   }
 
+  async function handleTickOnce() {
+    setTickInfo(null);
+    try {
+      const res = await fetch("/api/cron/tick");
+      if (!res.ok) {
+        const text = await res.text();
+        setTickInfo(`Tick failed: ${res.status} ${text}`);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setTickInfo(`Ticked (${data.gamesProcessed ?? "?"} games)`);
+        await fetchGames();
+      }
+    } catch (e) {
+      setTickInfo(`Tick error: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   useEffect(() => {
     fetchGames();
     const interval = setInterval(fetchGames, 1000);
@@ -69,15 +87,17 @@ export function GameGrid() {
       setElapsed("00:00");
       return;
     }
+    const started = new Date(startedAt).getTime();
+    setElapsed(formatElapsed(Date.now() - started));
     const timer = setInterval(() => {
-      const started = new Date(startedAt).getTime();
       setElapsed(formatElapsed(Date.now() - started));
     }, 1000);
     return () => clearInterval(timer);
   }, [startedAt]);
 
-  // Drive game progression in dev by hitting the tick endpoint regularly
+  // Drive game progression locally (disabled in production to avoid 401 spam)
   useEffect(() => {
+    if (process.env.NODE_ENV !== "development") return;
     const tick = async () => {
       try {
         await fetch("/api/cron/tick");
@@ -120,7 +140,15 @@ export function GameGrid() {
           <span className="text-[11px] text-gray-600">10s per move · 2 consecutive timeouts → forfeit</span>
         </div>
         <div className="flex items-center gap-2">
+          {tickInfo && <span className="text-[11px] text-gray-600" data-testid="tick-info">{tickInfo}</span>}
           {info && <span className="text-[11px] text-gray-600">{info}</span>}
+          <button
+            onClick={handleTickOnce}
+            className="border-2 border-black bg-white text-xs px-2 py-1"
+            data-testid="tick-once"
+          >
+            Tick once
+          </button>
           <button
             onClick={handleDestroy}
             disabled={destroying || games.length === 0}

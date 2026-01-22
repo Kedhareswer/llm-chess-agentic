@@ -20,8 +20,6 @@ const MODELS = [
   { id: "groq/openai/gpt-oss-safeguard-20b", name: "GPT-OSS Safeguard 20B", provider: "groq", active: true },
   { id: "groq/meta-llama/llama-4-scout-17b-16e-instruct", name: "Llama 4 Scout 17B", provider: "groq", active: true },
   { id: "groq/meta-llama/llama-4-maverick-17b-128e-instruct", name: "Llama 4 Maverick 17B", provider: "groq", active: true },
-  { id: "groq/compound", name: "Groq Compound", provider: "groq", active: true },
-  { id: "groq/compound-mini", name: "Groq Compound Mini", provider: "groq", active: true },
 
   // Gemini (working with 20s timeout)
   { id: "google/models/gemini-2.5-pro", name: "Gemini 2.5 Pro", provider: "google", active: true },
