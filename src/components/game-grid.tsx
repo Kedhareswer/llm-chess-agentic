@@ -62,17 +62,32 @@ export function GameGrid() {
     };
   }, []);
 
-  // Keep elapsed timer in sync with current games state (avoid stale closure)
+  // Keep elapsed timer in sync with the current game's start time without recreating each second
+  const startedAt = games[0]?.startedAt;
   useEffect(() => {
+    if (!startedAt) {
+      setElapsed("00:00");
+      return;
+    }
     const timer = setInterval(() => {
-      const current = games[0];
-      if (current?.startedAt) {
-        const started = new Date(current.startedAt).getTime();
-        setElapsed(formatElapsed(Date.now() - started));
-      }
+      const started = new Date(startedAt).getTime();
+      setElapsed(formatElapsed(Date.now() - started));
     }, 1000);
     return () => clearInterval(timer);
-  }, [games]);
+  }, [startedAt]);
+
+  // Drive game progression in dev by hitting the tick endpoint regularly
+  useEffect(() => {
+    const tick = async () => {
+      try {
+        await fetch("/api/cron/tick");
+      } catch {
+        // ignore
+      }
+    };
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
 
   async function handleDestroy() {
     setDestroying(true);
