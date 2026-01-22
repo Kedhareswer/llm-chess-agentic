@@ -118,20 +118,22 @@ export function GameGrid() {
     return () => clearInterval(interval);
   }, []);
 
-  // Automatic tick heartbeat - triggers game progression every 3 seconds when a game is active
+  // Automatic tick heartbeat - every 3s check for active games and tick once
   useEffect(() => {
-    if (games.length === 0) return;
-    
     const tickInterval = setInterval(async () => {
       try {
+        const res = await fetch("/api/games?status=active");
+        if (!res.ok) return;
+        const data = await res.json();
+        if ((data.games || []).length === 0) return;
         await fetch("/api/cron/tick");
       } catch {
         // Silently ignore tick errors
       }
     }, 3000);
-    
+
     return () => clearInterval(tickInterval);
-  }, [games.length]);
+  }, []);
 
   // Keep elapsed timer in sync with the current game's start time without recreating each second
   const startedAt = games[0]?.startedAt;
@@ -240,9 +242,21 @@ export function GameGrid() {
                 {game.result && (
                   <div className="border-2 border-t-0 border-black p-2 bg-gray-50">
                     <div className="flex flex-col gap-1">
-                      <span className="text-xs font-bold">
-                        {game.result === "1-0" ? "⚪ White wins" : game.result === "0-1" ? "⚫ Black wins" : "🤝 Draw"}
-                      </span>
+                      {game.result === "1-0" && (
+                        <span className="text-xs font-bold text-green-700 flex items-center gap-1 animate-pulse">
+                          ▲ White wins
+                        </span>
+                      )}
+                      {game.result === "0-1" && (
+                        <span className="text-xs font-bold text-red-700 flex items-center gap-1 animate-pulse">
+                          ▼ Black wins
+                        </span>
+                      )}
+                      {game.result === "1/2-1/2" && (
+                        <span className="text-xs font-bold text-gray-700 flex items-center gap-1">
+                          ↔ Draw
+                        </span>
+                      )}
                       {game.resultReason && (
                         <p className="text-[10px] text-gray-600 leading-tight">{game.resultReason}</p>
                       )}
