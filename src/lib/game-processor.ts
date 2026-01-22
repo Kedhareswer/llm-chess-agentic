@@ -157,6 +157,5 @@ async function endGame(game: Game, result: "1-0" | "0-1" | "1/2-1/2"): Promise<v
 }
 
 export async function matchmake(): Promise<void> {
-  // Manual single-game flow: matchmaking disabled.
   return;
 }

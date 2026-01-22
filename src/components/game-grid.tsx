@@ -2,16 +2,39 @@
 
 import { useEffect, useState } from "react";
 import { GameCard } from "./game-card";
-import type { Game } from "@/db/schema";
+import type { Game, Model } from "@/db/schema";
+
+type GameWithModels = Game & {
+  whiteModel?: Model;
+  blackModel?: Model;
+};
 
 export function GameGrid() {
-  const [games, setGames] = useState<Game[]>([]);
+  const [games, setGames] = useState<GameWithModels[]>([]);
 
   useEffect(() => {
     async function fetchGames() {
       const res = await fetch("/api/games?status=active");
       const data = await res.json();
-      setGames(data.games);
+      const first = data.games?.[0];
+      if (!first) {
+        setGames([]);
+        return;
+      }
+
+      try {
+        const detailRes = await fetch(`/api/games/${first.id}`);
+        const detail = await detailRes.json();
+        setGames([
+          {
+            ...first,
+            whiteModel: detail.white,
+            blackModel: detail.black,
+          },
+        ]);
+      } catch {
+        setGames([first]);
+      }
     }
 
     fetchGames();
@@ -28,7 +51,7 @@ export function GameGrid() {
   }
 
   return (
-    <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4" data-testid="game-grid">
       {games.map((game) => (
         <GameCard key={game.id} game={game} />
       ))}

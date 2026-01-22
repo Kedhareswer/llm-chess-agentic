@@ -8,7 +8,7 @@ export default function Home() {
         <GameGrid />
       </div>
 
-      <div className="w-80 border-l-2 border-black p-4">
+      <div className="w-80 border-l-2 border-black p-4 overflow-y-auto">
         <Leaderboard />
       </div>
     </div>

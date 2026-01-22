@@ -78,7 +78,6 @@ export function Leaderboard() {
         throw new Error(data.error || "Failed to start game");
       }
 
-      // Kick a tick to process the new game (dev bypass enabled server-side)
       await fetch("/api/cron/tick", { method: "POST" }).catch(() => {});
       setStartMessage("Game started");
     } catch (e: any) {
@@ -106,7 +105,7 @@ export function Leaderboard() {
   }
 
   return (
-    <div className="border-2 border-black bg-white">
+    <div className="border-2 border-black bg-white max-h-[80vh] overflow-y-auto">
       <div className="border-b-2 border-black px-3 py-2">
         <h2 className="text-sm font-bold">LEADERBOARD</h2>
       </div>
@@ -127,6 +126,7 @@ export function Leaderboard() {
                 checked={!!selected[model.id]}
                 onChange={(e) => toggleSelect(model.id, e.target.checked)}
                 title="Select for game"
+                data-testid={`select-model-${model.id.replace(/[^a-zA-Z0-9_-]/g, "_")}`}
               />
               <span className="font-bold">{model.elo}</span>
               <label className="flex items-center gap-1 text-xs text-gray-600">
@@ -142,7 +142,6 @@ export function Leaderboard() {
         ))}
       </div>
 
-      {/* Groq settings */}
       <div className="border-t-2 border-black px-3 py-3 space-y-2">
         <div className="flex items-center justify-between">
           <h3 className="text-xs font-bold">GROQ SETTINGS</h3>
@@ -157,11 +156,13 @@ export function Leaderboard() {
           value={groqKey}
           onChange={(e) => setGroqKey(e.target.value)}
           placeholder="gsk_..."
+          data-testid="groq-key"
         />
         <button
           onClick={handleSaveGroqKey}
           disabled={saving || !groqKey.trim()}
           className="w-full border-2 border-black bg-black text-white text-xs py-1 disabled:opacity-50"
+          data-testid="save-groq-key"
         >
           {saving ? "Saving..." : "Save Groq Key"}
         </button>
@@ -181,8 +182,6 @@ export function Leaderboard() {
             ))}
           </div>
         )}
-
-        {/* Manual single-game controls */}
         <div className="mt-3 space-y-2 border-t border-black pt-2">
           <div className="flex items-center justify-between text-xs font-bold">
             <span>Single Game</span>
@@ -192,6 +191,7 @@ export function Leaderboard() {
             onClick={handleStartGame}
             disabled={starting || selectedIds.length < 2}
             className="w-full border-2 border-black bg-white text-black text-xs py-1 disabled:opacity-50"
+            data-testid="start-game"
           >
             {starting ? "Starting..." : selectedIds.length < 2 ? "Select 2+ models" : "Start Game"}
           </button>
