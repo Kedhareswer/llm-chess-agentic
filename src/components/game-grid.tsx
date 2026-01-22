@@ -38,7 +38,7 @@ export function GameGrid() {
     }
 
     fetchGames();
-    const interval = setInterval(fetchGames, 5000);
+    const interval = setInterval(fetchGames, 1000);
     return () => clearInterval(interval);
   }, []);
 

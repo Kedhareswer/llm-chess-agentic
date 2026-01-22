@@ -81,6 +81,17 @@ export function Leaderboard() {
     setStarting(true);
     setStartMessage(null);
     try {
+      // Ensure selected models are active before starting
+      await Promise.all(
+        selectedIds.map((id) =>
+          fetch("/api/models/active", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id, active: true }),
+          }).catch(() => null)
+        )
+      );
+
       const res = await fetch("/api/games/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -94,7 +105,7 @@ export function Leaderboard() {
       await fetch("/api/cron/tick", { method: "POST" }).catch(() => {});
       setStartMessage("Game started");
     } catch (e: any) {
-      setStartMessage(e.message || "Failed to start game");
+      setStartMessage(e.message || "Failed to start game (ensure models are active)");
     } finally {
       setStarting(false);
     }

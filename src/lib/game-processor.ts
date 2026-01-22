@@ -18,6 +18,12 @@ export async function processGame(game: Game): Promise<void> {
     return; // Game already completed or doesn't exist
   }
 
+  // TTL: end games older than 25 minutes as draw
+  if (currentGame.startedAt && Date.now() - new Date(currentGame.startedAt).getTime() > 25 * 60 * 1000) {
+    await endGame(currentGame, "1/2-1/2");
+    return;
+  }
+
   const groqApiKey = getGroqApiKey();
 
   const turn = getTurn(currentGame.fen);

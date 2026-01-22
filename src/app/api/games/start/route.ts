@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { games, models, tournament } from "@/db/schema";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
+import { processGame } from "@/lib/game-processor";
 import { randomUUID } from "crypto";
 
 export async function POST(request: Request) {
@@ -17,7 +18,7 @@ export async function POST(request: Request) {
   const activeModels = await db
     .select()
     .from(models)
-    .where(sql`${models.id} = ANY(${uniqueIds}) AND ${models.active} = true`);
+    .where(and(inArray(models.id, uniqueIds), eq(models.active, true)));
 
   if (activeModels.length < 2) {
     return NextResponse.json({ error: "Selected models must exist and be active" }, { status: 400 });
@@ -35,7 +36,25 @@ export async function POST(request: Request) {
   const black = white.id === m1.id ? m2 : m1;
 
   const gameId = randomUUID();
-  await db.insert(games).values({ id: gameId, whiteId: white.id, blackId: black.id });
+  await db
+    .insert(games)
+    .values({
+      id: gameId,
+      whiteId: white.id,
+      blackId: black.id,
+      status: "active",
+      startedAt: new Date(),
+    });
+
+  // Kick off first move immediately so white starts
+  const [createdGame] = await db.select().from(games).where(eq(games.id, gameId));
+  if (createdGame) {
+    try {
+      await processGame(createdGame);
+    } catch (e) {
+      console.error("processGame after start failed", e);
+    }
+  }
 
   // ensure tournament running
   await db
