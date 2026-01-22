@@ -5,7 +5,7 @@ import { validateMove, applyMove, getLegalMoves, getTurn, isGameOver, getGameRes
 import { requestMove } from "./ai";
 import { calculateNewElo, outcomeFromResult } from "./elo";
 import type { Game } from "@/db/schema";
-import { getGroqApiKey } from "@/lib/groq-key-store";
+import { getGroqApiKey, getGeminiApiKey } from "@/lib/groq-key-store";
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -25,6 +25,8 @@ export async function processGame(game: Game): Promise<void> {
   }
 
   const groqApiKey = getGroqApiKey();
+  const geminiApiKey = getGeminiApiKey();
+  console.log(`[processGame] Game ${currentGame.id}, groqApiKey present: ${!!groqApiKey}`);
 
   const turn = getTurn(currentGame.fen);
   const modelId = turn === "w" ? currentGame.whiteId : currentGame.blackId;
@@ -54,7 +56,7 @@ export async function processGame(game: Game): Promise<void> {
         legalMoves,
         lastMoves: recentMoves.map(m => m.moveSan),
         errorContext,
-      }, 3, { groqApiKey });
+      }, 3, { groqApiKey, geminiApiKey });
 
       if (validateMove(currentGame.fen, moveResponse.move)) {
         break;
@@ -63,9 +65,11 @@ export async function processGame(game: Game): Promise<void> {
       errorContext = `"${moveResponse.move}" is illegal. Legal moves: ${legalMoves.join(", ")}`;
       moveResponse = null;
 
-    } catch {
+    } catch (err) {
+      console.error(`[processGame] Attempt ${attempt} failed for ${modelId}:`, err);
       if (attempt === 3) {
         // Forfeit
+        console.error(`[processGame] Forfeiting game ${currentGame.id} due to repeated failures`);
         await forfeitGame(currentGame, modelId);
         return;
       }

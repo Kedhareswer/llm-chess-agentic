@@ -11,6 +11,8 @@ export function Leaderboard() {
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [startMessage, setStartMessage] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [geminiKey, setGeminiKey] = useState("");
+  const [geminiSaveMessage, setGeminiSaveMessage] = useState<string | null>(null);
 
   useEffect(() => {
     async function fetchLeaderboard() {
@@ -23,6 +25,27 @@ export function Leaderboard() {
     const interval = setInterval(fetchLeaderboard, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  async function handleSaveGeminiKey() {
+    setSaving(true);
+    setGeminiSaveMessage(null);
+    try {
+      const res = await fetch("/api/tournament/gemini-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: geminiKey }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to save Gemini key");
+      }
+      setGeminiSaveMessage("Gemini key saved");
+    } catch (e: any) {
+      setGeminiSaveMessage(e.message || "Failed to save Gemini key");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   const groqModels = useMemo(
     () => models.filter((m) => m.provider === "groq"),
@@ -176,6 +199,30 @@ export function Leaderboard() {
           data-testid="save-groq-key"
         >
           {saving ? "Saving..." : "Save Groq Key"}
+        </button>
+
+        <div className="flex items-center justify-between pt-3">
+          <h3 className="text-xs font-bold">GEMINI SETTINGS</h3>
+          {geminiSaveMessage && (
+            <span className="text-[11px] text-gray-500">{geminiSaveMessage}</span>
+          )}
+        </div>
+        <label className="text-xs text-gray-700">Gemini API Key</label>
+        <textarea
+          className="w-full border border-black px-2 py-1 text-xs font-mono"
+          rows={2}
+          value={geminiKey}
+          onChange={(e) => setGeminiKey(e.target.value)}
+          placeholder="AIza..."
+          data-testid="gemini-key"
+        />
+        <button
+          onClick={handleSaveGeminiKey}
+          disabled={saving || !geminiKey.trim()}
+          className="w-full border-2 border-black bg-black text-white text-xs py-1 disabled:opacity-50"
+          data-testid="save-gemini-key"
+        >
+          {saving ? "Saving..." : "Save Gemini Key"}
         </button>
 
         {groqModels.length > 0 && (
