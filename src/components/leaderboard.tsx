@@ -17,9 +17,15 @@ export function Leaderboard() {
 
   useEffect(() => {
     async function fetchLeaderboard() {
-      const res = await fetch("/api/leaderboard");
-      const data = await res.json();
-      setModels(data.models);
+      try {
+        const res = await fetch("/api/leaderboard");
+        if (!res.ok) return;
+        const data = await res.json();
+        setModels(data.models);
+      } catch (err) {
+        // Silently handle network errors to prevent UI crashes
+        console.error('Failed to fetch leaderboard:', err);
+      }
     }
 
     fetchLeaderboard();

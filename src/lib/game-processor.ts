@@ -19,7 +19,7 @@ export async function processGame(game: Game): Promise<void> {
 
   // TTL: end games older than 25 minutes as draw
   if (currentGame.startedAt && Date.now() - new Date(currentGame.startedAt).getTime() > 25 * 60 * 1000) {
-    await endGame(currentGame, "1/2-1/2");
+    await endGame(currentGame, "1/2-1/2", "Game exceeded 25 minute time limit");
     return;
   }
 
@@ -76,7 +76,7 @@ export async function processGame(game: Game): Promise<void> {
 
     if (counts[key] >= 2) {
       console.error(`[processGame] Forfeiting ${modelId} due to repeated timeout/invalid`);
-      await forfeitGame(currentGame, modelId);
+      await forfeitGame(currentGame, modelId, "Repeated timeout or invalid moves");
       timeoutWarnings.delete(currentGame.id);
     }
     return;
@@ -98,7 +98,7 @@ export async function processGame(game: Game): Promise<void> {
   // Apply move
   const result = applyMove(currentGame.fen, moveResponse.move);
   if (!result) {
-    await forfeitGame(currentGame, modelId);
+    await forfeitGame(currentGame, modelId, "Invalid move returned");
     return;
   }
 
@@ -123,16 +123,18 @@ export async function processGame(game: Game): Promise<void> {
   // Check for game end
   if (isGameOver(result.fen)) {
     const gameResult = getGameResult(result.fen);
-    await endGame(currentGame, gameResult!);
+    const reason = gameResult === "1/2-1/2" ? "Draw by stalemate or insufficient material" : "Checkmate";
+    await endGame(currentGame, gameResult!, reason);
   }
 }
 
-async function forfeitGame(game: Game, forfeitingModelId: string): Promise<void> {
+async function forfeitGame(game: Game, forfeitingModelId: string, reason: string): Promise<void> {
   const result = forfeitingModelId === game.whiteId ? "0-1" : "1-0";
-  await endGame(game, result);
+  const forfeitingColor = forfeitingModelId === game.whiteId ? "White" : "Black";
+  await endGame(game, result, `${forfeitingColor} forfeited: ${reason}`);
 }
 
-async function endGame(game: Game, result: "1-0" | "0-1" | "1/2-1/2"): Promise<void> {
+async function endGame(game: Game, result: "1-0" | "0-1" | "1/2-1/2", reason: string): Promise<void> {
   // Re-check game is still active to prevent double-counting from race conditions
   const [currentGame] = await db.select().from(games).where(eq(games.id, game.id));
   if (!currentGame || currentGame.status !== "active") {
@@ -176,7 +178,7 @@ async function endGame(game: Game, result: "1-0" | "0-1" | "1/2-1/2"): Promise<v
   // Update game
   await db
     .update(games)
-    .set({ status: "complete", result, endedAt: new Date() })
+    .set({ status: "complete", result, resultReason: reason, endedAt: new Date() })
     .where(eq(games.id, game.id));
 }
 

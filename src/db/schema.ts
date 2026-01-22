@@ -24,6 +24,7 @@ export const games = pgTable("games", {
   fen: text("fen").notNull().default("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"),
   status: gameStatusEnum("status").notNull().default("active"),
   result: gameResultEnum("result"),
+  resultReason: text("result_reason"),
   startedAt: timestamp("started_at").notNull().defaultNow(),
   endedAt: timestamp("ended_at"),
 });
