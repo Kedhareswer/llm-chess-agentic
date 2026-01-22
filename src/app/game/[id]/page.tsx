@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { Chessboard } from "react-chessboard";
 import { ReasoningPanel } from "@/components/reasoning-panel";
@@ -18,6 +18,7 @@ export default function GamePage() {
   const params = useParams();
   const [data, setData] = useState<GameData | null>(null);
   const [elapsed, setElapsed] = useState("00:00");
+  const [tickInfo, setTickInfo] = useState<string | null>(null);
 
   function formatElapsed(ms: number) {
     const totalSec = Math.max(0, Math.floor(ms / 1000));
@@ -28,15 +29,17 @@ export default function GamePage() {
     return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   }
 
-  useEffect(() => {
-    const gameId = params.id as string;
-    if (!gameId) return;
+  const gameId = params.id as string;
 
-    async function fetchGame() {
-      const res = await fetch(`/api/games/${gameId}`);
-      const gameData = await res.json();
-      setData(gameData);
-    }
+  const fetchGame = useCallback(async () => {
+    if (!gameId) return;
+    const res = await fetch(`/api/games/${gameId}`);
+    const gameData = await res.json();
+    setData(gameData);
+  }, [gameId]);
+
+  useEffect(() => {
+    if (!gameId) return;
 
     fetchGame();
     const interval = setInterval(fetchGame, 5000);
@@ -52,7 +55,7 @@ export default function GamePage() {
       clearInterval(interval);
       clearInterval(timer);
     };
-  }, [params.id]);
+  }, [gameId, fetchGame]);
 
   useEffect(() => {
     if (data?.game?.startedAt) {
@@ -60,6 +63,22 @@ export default function GamePage() {
       setElapsed(formatElapsed(Date.now() - started));
     }
   }, [data?.game?.startedAt]);
+
+  async function handleTickOnce() {
+    setTickInfo(null);
+    try {
+      const res = await fetch("/api/cron/tick");
+      if (!res.ok) {
+        const text = await res.text();
+        setTickInfo(`Tick failed: ${res.status} ${text}`);
+        return;
+      }
+      setTickInfo("Ticked");
+      await fetchGame();
+    } catch (e) {
+      setTickInfo(`Tick error: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
 
   if (!data || !data.white || !data.black) {
     return (
@@ -75,8 +94,25 @@ export default function GamePage() {
   return (
     <div className="p-4">
       {/* Title bar */}
-      <div className="mb-4 text-center">
-        <h1 className="font-bold text-xl">
+      <div className="mb-4 flex flex-col items-center gap-2">
+        <div className="flex w-full items-center justify-between">
+          <div className="text-left">
+            <div className="text-xs text-gray-600">Elapsed: {elapsed}</div>
+            {data.game.result && (
+              <div className="text-xs text-gray-500">Result: {data.game.result}</div>
+            )}
+          </div>
+          {isActive && (
+            <button
+              onClick={handleTickOnce}
+              className="px-3 py-1 text-xs font-bold border-2 border-black bg-white hover:bg-gray-100"
+              data-testid="detail-tick-once"
+            >
+              Tick once
+            </button>
+          )}
+        </div>
+        <h1 className="font-bold text-xl text-center">
           <span className={isActive && isWhiteTurn ? "bg-yellow-200 px-2" : ""}>
             {data.white.name}
           </span>
@@ -90,8 +126,13 @@ export default function GamePage() {
             </span>
           )}
         </h1>
-        <div className="text-xs text-gray-600 mt-1">Elapsed: {elapsed}</div>
       </div>
+
+      {tickInfo && (
+        <div className="mb-4 p-2 text-xs border-2 border-black bg-blue-50 text-center" data-testid="detail-tick-info">
+          {tickInfo}
+        </div>
+      )}
 
       {/* 12-column grid: 3 | 6 | 3 */}
       <div className="grid grid-cols-12 gap-4">
