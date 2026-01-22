@@ -21,7 +21,7 @@ export function GameCard({ game }: GameCardProps) {
   return (
     <Link
       href={`/game/${game.id}`}
-      className="border-2 border-black bg-white p-2 hover:bg-gray-50 transition-colors block"
+      className="border-2 border-black bg-white p-2 hover:bg-gray-50 transition-colors block w-full max-w-[780px] mx-auto"
       data-testid="game-card"
     >
       {/* Black player - top */}
@@ -40,11 +40,11 @@ export function GameCard({ game }: GameCardProps) {
       </div>
 
       {/* Board with eval bar */}
-      <div className="flex gap-1">
+      <div className="flex gap-1 items-stretch">
         <div className="w-4 flex-shrink-0" style={{ aspectRatio: "1/8" }}>
           <EvalBar fen={game.fen} />
         </div>
-        <div className="aspect-square flex-1">
+        <div className="aspect-square flex-1 max-w-[90vw] md:max-w-[780px]">
           <Chessboard
             options={{
               position: game.fen,

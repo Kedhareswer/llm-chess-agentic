@@ -56,12 +56,25 @@ export function Leaderboard() {
   }
 
   function toggleSelect(id: string, value: boolean) {
-    setSelected((prev) => ({ ...prev, [id]: value }));
+    setStartMessage(null);
+    setSelected((prev) => {
+      const currentIds = Object.entries(prev)
+        .filter(([, v]) => v)
+        .map(([k]) => k);
+
+      // Enforce exactly two selections max
+      if (value && currentIds.length >= 2 && !prev[id]) {
+        setStartMessage("Select exactly two models");
+        return prev;
+      }
+
+      return { ...prev, [id]: value };
+    });
   }
 
   async function handleStartGame() {
-    if (selectedIds.length < 2) {
-      setStartMessage("Select at least two models");
+    if (selectedIds.length !== 2) {
+      setStartMessage("Select exactly two models");
       return;
     }
 
@@ -71,7 +84,7 @@ export function Leaderboard() {
       const res = await fetch("/api/games/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ modelIds: selectedIds }),
+        body: JSON.stringify({ modelIds: selectedIds.slice(0, 2) }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -110,7 +123,10 @@ export function Leaderboard() {
         <h2 className="text-sm font-bold">LEADERBOARD</h2>
       </div>
       <div className="divide-y divide-gray-200 max-h-[70vh] overflow-y-auto pr-1">
-        {models.map((model, index) => (
+        {models.map((model, index) => {
+          const isSelected = !!selected[model.id];
+          const isActiveToggle = !!model.active;
+          return (
           <div
             key={model.id}
             className="flex items-center justify-between px-3 py-2 text-sm"
@@ -120,26 +136,30 @@ export function Leaderboard() {
               <span className="font-medium">{model.name}</span>
             </div>
             <div className="flex items-center gap-4">
-              <input
-                type="checkbox"
-                className="h-3 w-3"
-                checked={!!selected[model.id]}
-                onChange={(e) => toggleSelect(model.id, e.target.checked)}
-                title="Select for game"
-                data-testid={`select-model-${model.id.replace(/[^a-zA-Z0-9_-]/g, "_")}`}
-              />
+              <label className="flex items-center gap-1 text-xs text-gray-700">
+                <input
+                  type="checkbox"
+                  className="h-3 w-3"
+                  checked={isSelected}
+                  onChange={(e) => toggleSelect(model.id, e.target.checked)}
+                  title="Select for game"
+                  data-testid={`select-model-${model.id.replace(/[^a-zA-Z0-9_-]/g, "_")}`}
+                />
+                <span>Select</span>
+              </label>
               <span className="font-bold">{model.elo}</span>
               <label className="flex items-center gap-1 text-xs text-gray-600">
                 <input
                   type="checkbox"
-                  checked={!!model.active}
+                  checked={isActiveToggle}
                   onChange={(e) => handleToggleModel(model.id, e.target.checked)}
                 />
                 Active
               </label>
             </div>
           </div>
-        ))}
+        );
+        })}
       </div>
 
       <div className="border-t-2 border-black px-3 py-3 space-y-2">
@@ -187,13 +207,25 @@ export function Leaderboard() {
             <span>Single Game</span>
             {startMessage && <span className="text-[11px] text-gray-500">{startMessage}</span>}
           </div>
+          <div className="text-[11px] text-gray-700">
+            Select exactly two models. Currently selected: {selectedIds.length}/2
+            {selectedIds.length === 2 && (
+              <div className="mt-1 text-[11px] text-gray-600">
+                {selectedIds.map((id) => models.find((m) => m.id === id)?.name || id).join(" vs ")}
+              </div>
+            )}
+          </div>
           <button
             onClick={handleStartGame}
-            disabled={starting || selectedIds.length < 2}
+            disabled={starting || selectedIds.length !== 2}
             className="w-full border-2 border-black bg-white text-black text-xs py-1 disabled:opacity-50"
             data-testid="start-game"
           >
-            {starting ? "Starting..." : selectedIds.length < 2 ? "Select 2+ models" : "Start Game"}
+            {starting
+              ? "Starting..."
+              : selectedIds.length === 2
+              ? "Start Game"
+              : "Select exactly two models"}
           </button>
         </div>
       </div>
