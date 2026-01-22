@@ -119,15 +119,15 @@ export async function requestMove(
   options?: { groqApiKey?: string; geminiApiKey?: string }
 ): Promise<MoveResponse> {
   const prompt = buildPrompt(params);
-  const moveTimeoutMs = 10_000;
+  const isGroq = modelId.startsWith("groq/");
+  const isGoogle = modelId.startsWith("google/");
+  const moveTimeoutMs = isGoogle ? 20_000 : 10_000;
 
   // Groq uses OpenAI-compatible API
-  const isGroq = modelId.startsWith("groq/");
   const groqModel = isGroq ? modelId.replace(/^groq\//, "") : null;
   const groqApiKey = options?.groqApiKey || process.env.GROQ_API_KEY;
 
   // Google Gemini models
-  const isGoogle = modelId.startsWith("google/");
   const googleModel = isGoogle ? modelId.replace(/^google\//, "") : null;
   const geminiApiKey = options?.geminiApiKey || process.env.GEMINI_API_KEY;
 
