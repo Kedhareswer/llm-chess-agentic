@@ -73,7 +73,9 @@ export function GameGrid() {
             const detailRes = await fetch(`/api/games/${game.id}`);
             const detail = await detailRes.json();
             return {
-              ...detail.game,
+              // keep the base list fields even if detail.game is missing
+              ...game,
+              ...(detail?.game || {}),
               whiteModel: detail.white,
               blackModel: detail.black,
             };
