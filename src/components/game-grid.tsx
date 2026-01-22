@@ -73,7 +73,7 @@ export function GameGrid() {
             const detailRes = await fetch(`/api/games/${game.id}`);
             const detail = await detailRes.json();
             return {
-              ...game,
+              ...detail.game,
               whiteModel: detail.white,
               blackModel: detail.black,
             };
@@ -116,6 +116,21 @@ export function GameGrid() {
     return () => clearInterval(interval);
   }, []);
 
+  // Automatic tick heartbeat - triggers game progression every 3 seconds when a game is active
+  useEffect(() => {
+    if (games.length === 0) return;
+    
+    const tickInterval = setInterval(async () => {
+      try {
+        await fetch("/api/cron/tick");
+      } catch {
+        // Silently ignore tick errors
+      }
+    }, 3000);
+    
+    return () => clearInterval(tickInterval);
+  }, [games.length]);
+
   // Keep elapsed timer in sync with the current game's start time without recreating each second
   const startedAt = games[0]?.startedAt;
   useEffect(() => {
@@ -130,20 +145,6 @@ export function GameGrid() {
     }, 1000);
     return () => clearInterval(timer);
   }, [startedAt]);
-
-  // Drive game progression locally (disabled in production to avoid 401 spam)
-  useEffect(() => {
-    if (process.env.NODE_ENV !== "development") return;
-    const tick = async () => {
-      try {
-        await fetch("/api/cron/tick");
-      } catch {
-        // ignore
-      }
-    };
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, []);
 
   async function handleDestroy() {
     setDestroying(true);
