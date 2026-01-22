@@ -122,44 +122,24 @@ export function Leaderboard() {
       <div className="border-b-2 border-black px-3 py-2">
         <h2 className="text-sm font-bold">LEADERBOARD</h2>
       </div>
-      <div className="divide-y divide-gray-200 max-h-[70vh] overflow-y-auto pr-1">
-        {models.map((model, index) => {
-          const isSelected = !!selected[model.id];
-          const isActiveToggle = !!model.active;
-          return (
+      <div className="divide-y divide-gray-200 max-h-[50vh] overflow-y-auto pr-1">
+        {models.map((model, index) => (
           <div
             key={model.id}
             className="flex items-center justify-between px-3 py-2 text-sm"
+            data-testid={`leaderboard-row-${model.id.replace(/[^a-zA-Z0-9_-]/g, "_")}`}
           >
             <div className="flex items-center gap-2">
               <span className="w-4 text-gray-500">{index + 1}.</span>
-              <span className="font-medium">{model.name}</span>
-            </div>
-            <div className="flex items-center gap-4">
-              <label className="flex items-center gap-1 text-xs text-gray-700">
-                <input
-                  type="checkbox"
-                  className="h-3 w-3"
-                  checked={isSelected}
-                  onChange={(e) => toggleSelect(model.id, e.target.checked)}
-                  title="Select for game"
-                  data-testid={`select-model-${model.id.replace(/[^a-zA-Z0-9_-]/g, "_")}`}
-                />
-                <span>Select</span>
-              </label>
-              <span className="font-bold">{model.elo}</span>
-              <label className="flex items-center gap-1 text-xs text-gray-600">
-                <input
-                  type="checkbox"
-                  checked={isActiveToggle}
-                  onChange={(e) => handleToggleModel(model.id, e.target.checked)}
-                />
-                Active
-              </label>
+              <div className="flex flex-col">
+                <span className="font-medium">{model.name}</span>
+                <span className="text-[11px] text-gray-600">
+                  ELO {model.elo} · W{model.wins}/L{model.losses}/D{model.draws}
+                </span>
+              </div>
             </div>
           </div>
-        );
-        })}
+        ))}
       </div>
 
       <div className="border-t-2 border-black px-3 py-3 space-y-2">
@@ -189,32 +169,59 @@ export function Leaderboard() {
 
         {groqModels.length > 0 && (
           <div className="mt-2 space-y-1">
-            <div className="text-[11px] font-bold text-gray-700">Groq Models</div>
+            <div className="text-[11px] font-bold text-gray-700">Groq Models (read-only)</div>
             {groqModels.map((m) => (
-              <label key={m.id} className="flex items-center justify-between text-xs text-gray-700 border px-2 py-1">
+              <div key={m.id} className="flex items-center justify-between text-xs text-gray-700 border px-2 py-1">
                 <span>{m.name}</span>
-                <input
-                  type="checkbox"
-                  checked={!!m.active}
-                  onChange={(e) => handleToggleModel(m.id, e.target.checked)}
-                />
-              </label>
+                <span className="text-[11px] text-gray-600">ELO {m.elo}</span>
+              </div>
             ))}
           </div>
         )}
-        <div className="mt-3 space-y-2 border-t border-black pt-2">
+
+        <div className="mt-4 space-y-2 border-t border-black pt-3">
           <div className="flex items-center justify-between text-xs font-bold">
-            <span>Single Game</span>
-            {startMessage && <span className="text-[11px] text-gray-500">{startMessage}</span>}
+            <span>GAME SETUP</span>
+            {startMessage && <span className="text-[11px] text-red-600">{startMessage}</span>}
           </div>
+
+          <div className="text-[11px] text-gray-700">Choose exactly two models to play.</div>
+
+          <div className="max-h-[200px] overflow-y-auto border border-black p-2 space-y-2" data-testid="game-setup-list">
+            {models.map((model) => {
+              const isSelected = !!selected[model.id];
+              const disabled = !isSelected && selectedIds.length >= 2;
+              return (
+                <label
+                  key={model.id}
+                  className={`flex items-center justify-between text-xs ${disabled ? "opacity-50" : ""}`}
+                >
+                  <div className="flex flex-col">
+                    <span className="font-medium">{model.name}</span>
+                    <span className="text-[11px] text-gray-600">ELO {model.elo} · W{model.wins}/L{model.losses}/D{model.draws}</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    disabled={disabled}
+                    checked={isSelected}
+                    onChange={(e) => toggleSelect(model.id, e.target.checked)}
+                    data-testid={`setup-select-model-${model.id.replace(/[^a-zA-Z0-9_-]/g, "_")}`}
+                    title="Select for game"
+                  />
+                </label>
+              );
+            })}
+          </div>
+
           <div className="text-[11px] text-gray-700">
-            Select exactly two models. Currently selected: {selectedIds.length}/2
+            Selected: {selectedIds.length}/2
             {selectedIds.length === 2 && (
               <div className="mt-1 text-[11px] text-gray-600">
                 {selectedIds.map((id) => models.find((m) => m.id === id)?.name || id).join(" vs ")}
               </div>
             )}
           </div>
+
           <button
             onClick={handleStartGame}
             disabled={starting || selectedIds.length !== 2}

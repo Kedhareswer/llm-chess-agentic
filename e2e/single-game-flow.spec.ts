@@ -125,9 +125,9 @@ test(
   // No auto selection: start game button should be disabled initially
   await expect(page.getByTestId("start-game")).toBeDisabled();
 
-  // Select two models
-  await page.getByTestId(`select-model-${sanitizeId(modelA.id)}`).check();
-  await page.getByTestId(`select-model-${sanitizeId(modelB.id)}`).check();
+  // Select two models via Game Setup list
+  await page.getByTestId(`setup-select-model-${sanitizeId(modelA.id)}`).check();
+  await page.getByTestId(`setup-select-model-${sanitizeId(modelB.id)}`).check();
 
   await expect(page.getByTestId("start-game")).toBeEnabled();
 
