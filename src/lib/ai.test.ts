@@ -26,8 +26,27 @@ describe("AI utilities", () => {
     expect(result).toBeNull();
   });
 
-  it("returns null for missing fields", () => {
+  it("extracts move from incomplete JSON with fallback reasoning", () => {
+    // New behavior: parser extracts moves even from incomplete JSON to prevent forfeits
     const result = parseAIResponse('{"move": "e5"}');
+    expect(result).not.toBeNull();
+    expect(result?.move).toBe("e5");
+  });
+
+  it("extracts move from natural language", () => {
+    const result = parseAIResponse("I will play e4 to control the center");
+    expect(result).not.toBeNull();
+    expect(result?.move).toBe("e4");
+  });
+
+  it("handles markdown code blocks", () => {
+    const response = '```json\n{"move": "Nf3", "reasoning": "Develop knight"}\n```';
+    const result = parseAIResponse(response);
+    expect(result).toEqual({ move: "Nf3", reasoning: "Develop knight" });
+  });
+
+  it("returns null for completely invalid input", () => {
+    const result = parseAIResponse("hello world no moves here");
     expect(result).toBeNull();
   });
 });

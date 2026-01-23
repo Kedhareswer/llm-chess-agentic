@@ -13,3 +13,176 @@ body {
 * {
   border-color: hsl(var(--border));
 }
+
+/* Game Start Animation */
+@keyframes game-start-slide-in {
+  0% {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.95);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes game-start-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+  }
+  50% {
+    box-shadow: 0 0 20px 4px rgba(34, 197, 94, 0.4);
+  }
+}
+
+.animate-game-start {
+  animation: game-start-slide-in 0.5s ease-out, game-start-glow 2s ease-in-out;
+}
+
+/* Game End Animations */
+@keyframes victory-bounce {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  25% {
+    transform: translateY(-8px);
+  }
+  50% {
+    transform: translateY(0);
+  }
+  75% {
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes victory-glow-white {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+    background-color: rgba(34, 197, 94, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 30px 8px rgba(34, 197, 94, 0.3);
+    background-color: rgba(34, 197, 94, 0.2);
+  }
+}
+
+@keyframes victory-glow-black {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+    background-color: rgba(239, 68, 68, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 30px 8px rgba(239, 68, 68, 0.3);
+    background-color: rgba(239, 68, 68, 0.2);
+  }
+}
+
+@keyframes draw-fade {
+  0%, 100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.animate-victory-white {
+  animation: victory-bounce 0.6s ease-out, victory-glow-white 2s ease-in-out infinite;
+}
+
+.animate-victory-black {
+  animation: victory-bounce 0.6s ease-out, victory-glow-black 2s ease-in-out infinite;
+}
+
+.animate-draw {
+  animation: draw-fade 2s ease-in-out infinite;
+}
+
+/* ELO Change Animations */
+@keyframes elo-increase {
+  0% {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  20% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes elo-decrease {
+  0% {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  20% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes elo-flash-green {
+  0%, 100% {
+    background-color: transparent;
+  }
+  50% {
+    background-color: rgba(34, 197, 94, 0.2);
+  }
+}
+
+@keyframes elo-flash-red {
+  0%, 100% {
+    background-color: transparent;
+  }
+  50% {
+    background-color: rgba(239, 68, 68, 0.2);
+  }
+}
+
+.animate-elo-up {
+  animation: elo-increase 0.5s ease-out, elo-flash-green 1s ease-in-out;
+}
+
+.animate-elo-down {
+  animation: elo-decrease 0.5s ease-out, elo-flash-red 1s ease-in-out;
+}
+
+/* Leaderboard Row Reorder Animation */
+@keyframes row-reorder {
+  0% {
+    opacity: 0.5;
+    transform: scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-row-reorder {
+  animation: row-reorder 0.3s ease-out;
+}
+
+/* Confetti-like celebration dots */
+@keyframes confetti-fall {
+  0% {
+    opacity: 1;
+    transform: translateY(0) rotate(0deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(100px) rotate(720deg);
+  }
+}
+
+.animate-confetti {
+  animation: confetti-fall 1.5s ease-out forwards;
+}

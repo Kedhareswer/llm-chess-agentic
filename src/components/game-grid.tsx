@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { GameCard } from "./game-card";
 import type { Game, Model } from "@/db/schema";
 
@@ -16,6 +16,9 @@ export function GameGrid() {
   const [info, setInfo] = useState<string | null>(null);
   const [tickInfo, setTickInfo] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState<string>("00:00");
+  const [isNewGame, setIsNewGame] = useState(false);
+  const [recentlyEndedGame, setRecentlyEndedGame] = useState<string | null>(null);
+  const previousGameIdRef = useRef<string | null>(null);
 
   function formatElapsed(ms: number) {
     const totalSec = Math.max(0, Math.floor(ms / 1000));
@@ -33,9 +36,29 @@ export function GameGrid() {
       const data = await res.json();
       const first = data.games?.[0];
       if (!first) {
+        // Check if we had an active game before - it just ended
+        if (previousGameIdRef.current) {
+          setRecentlyEndedGame(previousGameIdRef.current);
+          previousGameIdRef.current = null;
+          // Clear the ended game highlight after animation
+          setTimeout(() => setRecentlyEndedGame(null), 3000);
+        }
         setGames([]);
         setElapsed("00:00");
         return;
+      }
+
+      // Detect new game start
+      if (first.id !== previousGameIdRef.current) {
+        if (previousGameIdRef.current !== null) {
+          // Previous game ended, new one started
+          setRecentlyEndedGame(previousGameIdRef.current);
+          setTimeout(() => setRecentlyEndedGame(null), 3000);
+        }
+        previousGameIdRef.current = first.id;
+        setIsNewGame(true);
+        // Clear new game animation after it plays
+        setTimeout(() => setIsNewGame(false), 2500);
       }
 
       try {
@@ -209,14 +232,18 @@ export function GameGrid() {
 
           <div className="space-y-4">
             {games.map((game) => (
-              <GameCard
+              <div
                 key={game.id}
-                game={{
-                  ...game,
-                  whiteName: game.whiteModel?.name,
-                  blackName: game.blackModel?.name,
-                }}
-              />
+                className={isNewGame ? "animate-game-start" : ""}
+              >
+                <GameCard
+                  game={{
+                    ...game,
+                    whiteName: game.whiteModel?.name,
+                    blackName: game.blackModel?.name,
+                  }}
+                />
+              </div>
             ))}
           </div>
         </div>
@@ -230,44 +257,58 @@ export function GameGrid() {
         <div>
           <h3 className="text-sm font-bold mb-2">PREVIOUS GAMES</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 max-h-[800px] overflow-y-auto border-2 border-black bg-gray-50 p-4">
-            {previousGames.map((game) => (
-              <div key={game.id} className="bg-white">
-                <GameCard
-                  game={{
-                    ...game,
-                    whiteName: game.whiteModel?.name,
-                    blackName: game.blackModel?.name,
-                  }}
-                />
-                {game.result && (
-                  <div className="border-2 border-t-0 border-black p-2 bg-gray-50">
-                    <div className="flex flex-col gap-1">
-                      {game.result === "1-0" && (
-                        <span className="text-xs font-bold text-green-700 flex items-center gap-1 animate-pulse">
-                          ▲ White wins
+            {previousGames.map((game) => {
+              const isRecentlyEnded = game.id === recentlyEndedGame;
+              const victoryClass = isRecentlyEnded
+                ? game.result === "1-0"
+                  ? "animate-victory-white"
+                  : game.result === "0-1"
+                  ? "animate-victory-black"
+                  : "animate-draw"
+                : "";
+              
+              return (
+                <div
+                  key={game.id}
+                  className={`bg-white transition-all duration-300 ${victoryClass}`}
+                >
+                  <GameCard
+                    game={{
+                      ...game,
+                      whiteName: game.whiteModel?.name,
+                      blackName: game.blackModel?.name,
+                    }}
+                  />
+                  {game.result && (
+                    <div className="border-2 border-t-0 border-black p-2 bg-gray-50">
+                      <div className="flex flex-col gap-1">
+                        {game.result === "1-0" && (
+                          <span className={`text-xs font-bold text-green-700 flex items-center gap-1 ${isRecentlyEnded ? "animate-victory-white" : ""}`}>
+                            <span className="inline-block">🏆</span> White wins
+                          </span>
+                        )}
+                        {game.result === "0-1" && (
+                          <span className={`text-xs font-bold text-red-700 flex items-center gap-1 ${isRecentlyEnded ? "animate-victory-black" : ""}`}>
+                            <span className="inline-block">🏆</span> Black wins
+                          </span>
+                        )}
+                        {game.result === "1/2-1/2" && (
+                          <span className={`text-xs font-bold text-gray-700 flex items-center gap-1 ${isRecentlyEnded ? "animate-draw" : ""}`}>
+                            <span className="inline-block">🤝</span> Draw
+                          </span>
+                        )}
+                        {game.resultReason && (
+                          <p className="text-[10px] text-gray-600 leading-tight">{game.resultReason}</p>
+                        )}
+                        <span className="text-[10px] text-gray-500">
+                          {game.endedAt && new Date(game.endedAt).toLocaleString()}
                         </span>
-                      )}
-                      {game.result === "0-1" && (
-                        <span className="text-xs font-bold text-red-700 flex items-center gap-1 animate-pulse">
-                          ▼ Black wins
-                        </span>
-                      )}
-                      {game.result === "1/2-1/2" && (
-                        <span className="text-xs font-bold text-gray-700 flex items-center gap-1">
-                          ↔ Draw
-                        </span>
-                      )}
-                      {game.resultReason && (
-                        <p className="text-[10px] text-gray-600 leading-tight">{game.resultReason}</p>
-                      )}
-                      <span className="text-[10px] text-gray-500">
-                        {game.endedAt && new Date(game.endedAt).toLocaleString()}
-                      </span>
+                      </div>
                     </div>
-                  </div>
-                )}
-              </div>
-            ))}
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

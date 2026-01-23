@@ -10,12 +10,24 @@ import { getGroqApiKey, getGeminiApiKey } from "@/lib/groq-key-store";
 // Track consecutive timeouts per game/side (white/black). Two strikes => forfeit.
 const timeoutWarnings: Map<string, { white: number; black: number }> = new Map();
 
+// Track games currently being processed to prevent race conditions
+const processingGames: Set<string> = new Set();
+
 export async function processGame(game: Game): Promise<void> {
-  // Re-fetch game to check if still active (protect against concurrent ticks)
-  const [currentGame] = await db.select().from(games).where(eq(games.id, game.id));
-  if (!currentGame || currentGame.status !== "active") {
-    return; // Game already completed or doesn't exist
+  // Prevent concurrent processing of the same game
+  if (processingGames.has(game.id)) {
+    console.log(`[processGame] Game ${game.id} already being processed, skipping`);
+    return;
   }
+  
+  processingGames.add(game.id);
+  
+  try {
+    // Re-fetch game to check if still active (protect against concurrent ticks)
+    const [currentGame] = await db.select().from(games).where(eq(games.id, game.id));
+    if (!currentGame || currentGame.status !== "active") {
+      return; // Game already completed or doesn't exist
+    }
 
   // TTL: end games older than 25 minutes as draw
   if (currentGame.startedAt && Date.now() - new Date(currentGame.startedAt).getTime() > 25 * 60 * 1000) {
@@ -61,7 +73,25 @@ export async function processGame(game: Game): Promise<void> {
       timedOutOrFailed = true;
     }
   } catch (err) {
-    console.error(`[processGame] Move request failed for ${modelId}:`, err);
+    const error = err instanceof Error ? err : new Error(String(err));
+    console.error(`[processGame] Move request failed for ${modelId}:`, error);
+    
+    // Check if it's an API key error
+    if (error.message.includes("401") || error.message.includes("403") || 
+        error.message.includes("API key") || error.message.includes("Unauthorized")) {
+      console.error(`[processGame] API key error detected for ${modelId}, destroying match`);
+      await endGame(currentGame, "1/2-1/2", `Match cancelled: Invalid API key for ${modelId}`);
+      return;
+    }
+    
+    // Check if it's a rate limit error
+    if (error.message.includes("429") || error.message.includes("rate limit") || 
+        error.message.includes("quota exceeded")) {
+      console.error(`[processGame] Rate limit error detected for ${modelId}, destroying match`);
+      await endGame(currentGame, "1/2-1/2", `Match cancelled: API rate limit exceeded for ${modelId}`);
+      return;
+    }
+    
     moveResponse = null;
     timedOutOrFailed = true;
   }
@@ -95,23 +125,31 @@ export async function processGame(game: Game): Promise<void> {
     }
   }
 
-  // Apply move
+  // Apply move with comprehensive validation
+  console.log(`[processGame] Applying move "${moveResponse.move}" for ${color} (${modelId})`);
+  console.log(`[processGame] Current FEN: ${currentGame.fen}`);
+  console.log(`[processGame] Legal moves: ${legalMoves.join(", ")}`);
+  
   const result = applyMove(currentGame.fen, moveResponse.move);
   if (!result) {
+    console.error(`[processGame] CRITICAL: applyMove failed for "${moveResponse.move}" - this should never happen after validation!`);
     await forfeitGame(currentGame, modelId, "Invalid move returned");
     return;
   }
 
   const moveNumber = getMoveNumber(currentGame.fen);
+  
+  console.log(`[processGame] Move applied successfully. New FEN: ${result.fen}`);
+  console.log(`[processGame] AI Reasoning: ${moveResponse.reasoning}`);
 
-  // Store move
+  // Store move with actual AI reasoning
   await db.insert(moves).values({
     gameId: currentGame.id,
     modelId,
     moveNumber,
     moveSan: moveResponse.move,
     fenAfter: result.fen,
-    reasoning: moveResponse.reasoning,
+    reasoning: moveResponse.reasoning, // Store actual AI reasoning, not placeholder
   });
 
   // Update game
@@ -125,6 +163,10 @@ export async function processGame(game: Game): Promise<void> {
     const gameResult = getGameResult(result.fen);
     const reason = gameResult === "1/2-1/2" ? "Draw by stalemate or insufficient material" : "Checkmate";
     await endGame(currentGame, gameResult!, reason);
+  }
+  } finally {
+    // Always release the lock
+    processingGames.delete(game.id);
   }
 }
 

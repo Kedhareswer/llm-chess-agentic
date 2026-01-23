@@ -1,7 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import type { Model } from "@/db/schema";
+
+// Track ELO changes for animations
+interface EloChange {
+  modelId: string;
+  previousElo: number;
+  currentElo: number;
+  delta: number;
+  timestamp: number;
+}
 
 export function Leaderboard() {
   const [models, setModels] = useState<Model[]>([]);
@@ -14,6 +23,12 @@ export function Leaderboard() {
   const [geminiKey, setGeminiKey] = useState("");
   const [geminiSaveMessage, setGeminiSaveMessage] = useState<string | null>(null);
   const [geminiSaving, setGeminiSaving] = useState(false);
+  
+  // ELO change tracking
+  const [eloChanges, setEloChanges] = useState<Record<string, EloChange>>({});
+  const previousModelsRef = useRef<Map<string, Model>>(new Map());
+  const previousRanksRef = useRef<Map<string, number>>(new Map());
+  const [reorderedIds, setReorderedIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     async function fetchLeaderboard() {
@@ -21,7 +36,62 @@ export function Leaderboard() {
         const res = await fetch("/api/leaderboard");
         if (!res.ok) return;
         const data = await res.json();
-        setModels(data.models);
+        const newModels: Model[] = data.models;
+        
+        // Detect ELO changes
+        const now = Date.now();
+        const newChanges: Record<string, EloChange> = {};
+        const newReordered = new Set<string>();
+        
+        newModels.forEach((model, index) => {
+          const prevModel = previousModelsRef.current.get(model.id);
+          const prevRank = previousRanksRef.current.get(model.id);
+          
+          // Check for ELO change
+          if (prevModel && prevModel.elo !== model.elo) {
+            newChanges[model.id] = {
+              modelId: model.id,
+              previousElo: prevModel.elo,
+              currentElo: model.elo,
+              delta: model.elo - prevModel.elo,
+              timestamp: now,
+            };
+          }
+          
+          // Check for rank change
+          if (prevRank !== undefined && prevRank !== index) {
+            newReordered.add(model.id);
+          }
+        });
+        
+        // Update refs for next comparison
+        previousModelsRef.current = new Map(newModels.map(m => [m.id, m]));
+        previousRanksRef.current = new Map(newModels.map((m, i) => [m.id, i]));
+        
+        // Merge new changes with existing (keep recent ones)
+        if (Object.keys(newChanges).length > 0) {
+          setEloChanges(prev => {
+            const merged = { ...prev };
+            Object.entries(newChanges).forEach(([id, change]) => {
+              merged[id] = change;
+            });
+            // Clean up old changes (older than 5 seconds)
+            Object.keys(merged).forEach(id => {
+              if (now - merged[id].timestamp > 5000) {
+                delete merged[id];
+              }
+            });
+            return merged;
+          });
+        }
+        
+        if (newReordered.size > 0) {
+          setReorderedIds(newReordered);
+          // Clear reorder animation after it plays
+          setTimeout(() => setReorderedIds(new Set()), 500);
+        }
+        
+        setModels(newModels);
       } catch (err) {
         // Silently handle network errors to prevent UI crashes
         console.error('Failed to fetch leaderboard:', err);
@@ -164,23 +234,55 @@ export function Leaderboard() {
         <h2 className="text-sm font-bold">LEADERBOARD</h2>
       </div>
       <div className="divide-y divide-gray-200 max-h-[50vh] overflow-y-auto pr-1">
-        {models.map((model, index) => (
-          <div
-            key={model.id}
-            className="flex items-center justify-between px-3 py-2 text-sm"
-            data-testid={`leaderboard-row-${model.id.replace(/[^a-zA-Z0-9_-]/g, "_")}`}
-          >
-            <div className="flex items-center gap-2">
-              <span className="w-4 text-gray-500">{index + 1}.</span>
-              <div className="flex flex-col">
-                <span className="font-medium">{model.name}</span>
-                <span className="text-[11px] text-gray-600">
-                  ELO {model.elo} · W{model.wins}/L{model.losses}/D{model.draws}
-                </span>
+        {models.map((model, index) => {
+          const eloChange = eloChanges[model.id];
+          const isReordered = reorderedIds.has(model.id);
+          const hasEloChange = eloChange && Date.now() - eloChange.timestamp < 5000;
+          
+          // Determine animation class
+          let rowAnimation = "";
+          if (isReordered) {
+            rowAnimation = "animate-row-reorder";
+          } else if (hasEloChange) {
+            rowAnimation = eloChange.delta > 0 ? "animate-elo-up" : "animate-elo-down";
+          }
+          
+          return (
+            <div
+              key={model.id}
+              className={`flex items-center justify-between px-3 py-2 text-sm transition-all duration-300 ${rowAnimation}`}
+              data-testid={`leaderboard-row-${model.id.replace(/[^a-zA-Z0-9_-]/g, "_")}`}
+            >
+              <div className="flex items-center gap-2">
+                <span className="w-6 text-gray-500 font-bold">{index + 1}.</span>
+                <div className="flex flex-col">
+                  <span className="font-medium">{model.name}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-gray-600">
+                      ELO {model.elo}
+                    </span>
+                    {hasEloChange && (
+                      <span
+                        className={`text-[10px] font-bold px-1 py-0.5 rounded ${
+                          eloChange.delta > 0
+                            ? "text-green-700 bg-green-100"
+                            : "text-red-700 bg-red-100"
+                        }`}
+                      >
+                        {eloChange.delta > 0 ? "▲" : "▼"}
+                        {eloChange.delta > 0 ? "+" : ""}
+                        {eloChange.delta}
+                      </span>
+                    )}
+                    <span className="text-[11px] text-gray-500">
+                      W{model.wins}/L{model.losses}/D{model.draws}
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="border-t-2 border-black px-3 py-3 space-y-2">
