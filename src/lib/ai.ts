@@ -225,7 +225,16 @@ export function parseAIResponse(response: string): MoveResponse | null {
         if (match && match[1]) {
           // Try to extract reasoning from the response
           const reasoningMatch = response.match(/"reasoning"\s*:\s*"([^"]+)"|"reason"\s*:\s*"([^"]+)"/i);
-          const reasoning = reasoningMatch ? (reasoningMatch[1] || reasoningMatch[2]) : "Move extracted from natural language response";
+
+          let reasoning: string;
+          if (reasoningMatch) {
+            reasoning = reasoningMatch[1] || reasoningMatch[2] || "No reasoning provided";
+          } else {
+            // As a fallback, keep the full natural-language response as the reasoning
+            // so the UI shows the actual explanation the model gave, not a placeholder.
+            reasoning = response.trim();
+          }
+
           return JSON.stringify({ move: match[1], reasoning });
         }
       }
@@ -352,20 +361,10 @@ export async function requestMove(
       
       const parsed = parseAIResponse(text);
       if (parsed) {
-        // Validate move is in legal moves list
-        if (params.legalMoves.includes(parsed.move)) {
-          console.log(`[requestMove] Valid move: ${parsed.move}`);
-          return parsed;
-        } else {
-          // Try to intelligently map invalid move to legal move (e.g., "5" -> "e5")
-          const mappedMove = mapInvalidMoveToLegal(parsed.move, params.legalMoves);
-          if (mappedMove) {
-            console.log(`[requestMove] Mapped invalid move "${parsed.move}" to legal move "${mappedMove}"`);
-            return { move: mappedMove, reasoning: parsed.reasoning };
-          }
-          console.warn(`[requestMove] Move "${parsed.move}" not in legal moves and cannot be mapped, retrying...`);
-          lastError = new Error(`Move "${parsed.move}" is not legal`);
-        }
+        // Do not auto-map or auto-fix illegal moves here; the judge layer will
+        // validate against chess.js and, if needed, warn the model and retry.
+        console.log(`[requestMove] Parsed move candidate: ${parsed.move}`);
+        return parsed;
       } else {
         console.warn(`[requestMove] Failed to parse response, retrying...`);
         lastError = new Error("Failed to parse AI response");
@@ -382,7 +381,10 @@ export async function requestMove(
     }
   }
 
-  // All retries failed - use random legal move as last resort to prevent forfeit
-  console.warn(`[requestMove] All attempts failed for ${modelId}, falling back to random move`);
-  return pickRandomMove(params.legalMoves);
+  // All retries failed - surface the error so the judge layer can decide whether
+  // to warn the model, retry, or eventually forfeit the game. We no longer
+  // generate random fallback moves here, because every move should come from
+  // the model itself.
+  console.warn(`[requestMove] All attempts failed for ${modelId}`);
+  throw (lastError ?? new Error(`All attempts failed for ${modelId}`));
 }

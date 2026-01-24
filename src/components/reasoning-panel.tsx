@@ -7,6 +7,25 @@ interface ReasoningPanelProps {
   isThinking?: boolean;
 }
 
+function normalizeReasoning(text: string | undefined): string {
+  if (!text) return "No reasoning provided";
+  const trimmed = text.trim();
+
+  try {
+    const maybeJson = trimmed.replace(/^```json\s*/i, "").replace(/```\s*$/i, "");
+    const parsed = JSON.parse(maybeJson);
+    if (parsed && typeof parsed === "object") {
+      if (typeof parsed.reasoning === "string") return parsed.reasoning;
+      if (typeof parsed.reason === "string") return parsed.reason;
+      if (typeof parsed === "string") return parsed;
+    }
+  } catch {
+    // Not JSON; fall through to trimmed text
+  }
+
+  return trimmed;
+}
+
 // Provider-specific colors
 const PROVIDER_CONFIG: Record<string, { bg: string; bgLight: string; text: string; border: string; symbol: string }> = {
   openai: { bg: "#22c55e", bgLight: "#dcfce7", text: "#166534", border: "#22c55e", symbol: "◆" },
@@ -21,6 +40,13 @@ export function ReasoningPanel({ model, moves, color, isThinking }: ReasoningPan
   const modelMoves = moves.filter((m) => m.modelId === model.id);
   const latestMove = modelMoves[modelMoves.length - 1];
   const config = PROVIDER_CONFIG[model.provider] || PROVIDER_CONFIG.openai;
+
+  const latestReasoningRaw = latestMove?.reasoning;
+  const latestReasoning = normalizeReasoning(latestReasoningRaw);
+  const hasJudgeWarning = latestReasoningRaw?.includes("⚠ Judge retry");
+  const displayReasoning = hasJudgeWarning
+    ? latestReasoning.replace(/\s*⚠ Judge retry.*$/, "").trim() + " (Judge warned)"
+    : latestReasoning;
 
   return (
     <div style={{ display: "flex", height: "100%", flexDirection: "column", backgroundColor: "white" }}>
@@ -90,11 +116,16 @@ export function ReasoningPanel({ model, moves, color, isThinking }: ReasoningPan
               move {latestMove.moveNumber}
             </span>
           </div>
-          <div style={{ backgroundColor: "white", borderRadius: "8px", padding: "10px", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }}>
-            <div style={{ color: config.text, fontSize: "10px", fontWeight: "bold", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-              Reasoning
+          <div style={{ backgroundColor: "white", borderRadius: "8px", padding: "10px", boxShadow: "0 1px 2px rgba(0,0,0,0.05)", position: "relative" }}>
+            <div style={{ color: config.text, fontSize: "10px", fontWeight: "bold", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: "8px" }}>
+              <span>Reasoning</span>
+              {hasJudgeWarning && (
+                <span style={{ backgroundColor: "#f97316", color: "white", padding: "2px 6px", borderRadius: "4px", fontSize: "10px", fontWeight: 700 }}>
+                  Judge warning
+                </span>
+              )}
             </div>
-            <p style={{ fontSize: "13px", color: "#374151", lineHeight: 1.5, margin: 0 }}>{latestMove.reasoning}</p>
+            <p style={{ fontSize: "13px", color: "#374151", lineHeight: 1.5, margin: 0, whiteSpace: "pre-wrap" }}>{displayReasoning}</p>
           </div>
         </div>
       ) : (
@@ -135,7 +166,11 @@ export function ReasoningPanel({ model, moves, color, isThinking }: ReasoningPan
                     </span>
                   </div>
                   {idx === 0 && (
-                    <p style={{ fontSize: "12px", color: "#6b7280", marginTop: "6px", marginBottom: 0, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{move.reasoning}</p>
+                    <p
+                      style={{ fontSize: "12px", color: "#6b7280", marginTop: "6px", marginBottom: 0, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", whiteSpace: "pre-wrap" }}
+                    >
+                      {normalizeReasoning(move.reasoning)}
+                    </p>
                   )}
                 </div>
               ))}

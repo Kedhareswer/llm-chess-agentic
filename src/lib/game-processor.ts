@@ -19,9 +19,9 @@ export async function processGame(game: Game): Promise<void> {
     console.log(`[processGame] Game ${game.id} already being processed, skipping`);
     return;
   }
-  
+
   processingGames.add(game.id);
-  
+
   try {
     // Re-fetch game to check if still active (protect against concurrent ticks)
     const [currentGame] = await db.select().from(games).where(eq(games.id, game.id));
@@ -54,24 +54,18 @@ export async function processGame(game: Game): Promise<void> {
   const legalMoves = getLegalMoves(currentGame.fen);
 
   let moveResponse;
-  let errorContext: string | undefined;
   let timedOutOrFailed = false;
 
-  // Single attempt with 10s timeout enforced in ai.ts
+  // Judge layer: request a move and validate it before allowing it to hit the board.
+  // If the model returns an invalid move, we warn it via errorContext and immediately
+  // ask again, without changing the board state.
   try {
-    moveResponse = await requestMove(modelId, {
+    moveResponse = await judgeMoveForTurn({
       fen: currentGame.fen,
       color: color as "white" | "black",
       legalMoves,
       lastMoves: recentMoves.map(m => m.moveSan),
-      errorContext,
-    }, 1, { groqApiKey, geminiApiKey });
-
-    if (moveResponse && !validateMove(currentGame.fen, moveResponse.move)) {
-      errorContext = `"${moveResponse.move}" is illegal. Legal moves: ${legalMoves.join(", ")}`;
-      moveResponse = null;
-      timedOutOrFailed = true;
-    }
+    }, modelId, { groqApiKey, geminiApiKey });
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
     console.error(`[processGame] Move request failed for ${modelId}:`, error);
@@ -139,8 +133,9 @@ export async function processGame(game: Game): Promise<void> {
 
   const moveNumber = getMoveNumber(currentGame.fen);
   
+  const normalizedReasoning = extractReasoning(moveResponse.reasoning);
   console.log(`[processGame] Move applied successfully. New FEN: ${result.fen}`);
-  console.log(`[processGame] AI Reasoning: ${moveResponse.reasoning}`);
+  console.log(`[processGame] AI Reasoning: ${normalizedReasoning}`);
 
   // Store move with actual AI reasoning
   await db.insert(moves).values({
@@ -149,7 +144,7 @@ export async function processGame(game: Game): Promise<void> {
     moveNumber,
     moveSan: moveResponse.move,
     fenAfter: result.fen,
-    reasoning: moveResponse.reasoning, // Store actual AI reasoning, not placeholder
+    reasoning: normalizedReasoning, // Store actual AI reasoning, normalized if wrapped in JSON
   });
 
   // Update game
@@ -168,6 +163,80 @@ export async function processGame(game: Game): Promise<void> {
     // Always release the lock
     processingGames.delete(game.id);
   }
+}
+
+// Judge helper: validates moves returned by the model before they can be applied.
+// It will give the model up to MAX_JUDGE_ATTEMPTS chances, updating errorContext so the
+// prompt clearly says the previous move was invalid and listing the legal moves.
+// If all attempts fail (timeouts, invalid, parse errors), it throws so the caller
+// can handle warnings/forfeits.
+const MAX_JUDGE_ATTEMPTS = 3;
+
+function extractReasoning(raw: string | undefined): string {
+  if (!raw) return "No reasoning provided";
+  const trimmed = raw.trim();
+
+  // If the model returned a JSON-looking blob, try to pull the reasoning field out of it.
+  try {
+    const maybeJson = trimmed.replace(/^```json\s*/i, "").replace(/```\s*$/i, "");
+    const parsed = JSON.parse(maybeJson);
+    if (parsed && typeof parsed === "object") {
+      if (typeof parsed.reasoning === "string") return parsed.reasoning;
+      if (typeof parsed.reason === "string") return parsed.reason;
+      // If the JSON itself is just a string, return it
+      if (typeof parsed === "string") return parsed;
+    }
+  } catch {
+    // Not JSON, fall through
+  }
+
+  return trimmed;
+}
+
+async function judgeMoveForTurn(
+  baseParams: {
+    fen: string;
+    color: "white" | "black";
+    legalMoves: string[];
+    lastMoves: string[];
+  },
+  modelId: string,
+  keys: { groqApiKey?: string; geminiApiKey?: string },
+) {
+  let errorContext: string | undefined;
+
+  for (let attempt = 1; attempt <= MAX_JUDGE_ATTEMPTS; attempt++) {
+    console.log(`[judgeMoveForTurn] Attempt ${attempt}/${MAX_JUDGE_ATTEMPTS} for ${modelId}`);
+    let response;
+    try {
+      response = await requestMove(
+        modelId,
+        { ...baseParams, errorContext },
+        1,
+        keys,
+      );
+
+      // Hard check against chess.js as the final judge.
+      if (validateMove(baseParams.fen, response.move)) {
+        const warningNote = attempt > 1 ? ` ⚠ Judge retry (${attempt - 1} prior illegal attempt${attempt - 1 > 1 ? "s" : ""})` : "";
+        const annotated = warningNote ? { ...response, reasoning: `${response.reasoning}${warningNote}` } : response;
+        console.log(`[judgeMoveForTurn] Accepted legal move "${response.move}" for ${modelId}${warningNote ? " after warning" : ""}`);
+        return annotated;
+      }
+
+      // Warn the model and try again with updated error context for an illegal move.
+      console.warn(
+        `[judgeMoveForTurn] Model ${modelId} proposed illegal move "${response.move}". Asking it to try again.`,
+      );
+      errorContext = `Your previous move "${response.move}" was ILLEGAL. You MUST choose exactly one move from this list of legal moves: ${baseParams.legalMoves.join(", ")}. Do not repeat an illegal move; strictly pick one legal move.`;
+    } catch (err) {
+      console.warn(`[judgeMoveForTurn] Error from requestMove for ${modelId}:`, err);
+      errorContext = `Failed to get a valid response. You MUST pick one legal move from: ${baseParams.legalMoves.join(", ")}. Do not repeat illegal or malformed moves.`;
+      continue;
+    }
+  }
+
+  throw new Error(`Judge failed: ${modelId} did not produce a legal move after ${MAX_JUDGE_ATTEMPTS} attempts`);
 }
 
 async function forfeitGame(game: Game, forfeitingModelId: string, reason: string): Promise<void> {
