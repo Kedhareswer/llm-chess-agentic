@@ -12,12 +12,36 @@ function normalizeReasoning(text: string | undefined): string {
   const trimmed = text.trim();
 
   try {
-    const maybeJson = trimmed.replace(/^```json\s*/i, "").replace(/```\s*$/i, "");
-    const parsed = JSON.parse(maybeJson);
-    if (parsed && typeof parsed === "object") {
-      if (typeof parsed.reasoning === "string") return parsed.reasoning;
-      if (typeof parsed.reason === "string") return parsed.reason;
-      if (typeof parsed === "string") return parsed;
+    const withoutFences = trimmed
+      .replace(/^```json\s*/i, "")
+      .replace(/^```\s*/i, "")
+      .replace(/```\s*$/i, "");
+
+    const candidates: string[] = [];
+    candidates.push(withoutFences);
+
+    const objectMatch = withoutFences.match(/\{[\s\S]*?\}/);
+    if (objectMatch) {
+      candidates.push(objectMatch[0]);
+    }
+
+    for (const candidate of candidates) {
+      try {
+        const parsed = JSON.parse(candidate);
+        if (parsed && typeof parsed === "object") {
+          if (typeof (parsed as any).reasoning === "string") return (parsed as any).reasoning.trim();
+          if (typeof (parsed as any).reason === "string") return (parsed as any).reason.trim();
+          if (typeof parsed === "string") return (parsed as string).trim();
+        }
+      } catch {
+        // Try next candidate
+      }
+    }
+
+    const reasoningMatch = withoutFences.match(/"reasoning"\s*:\s*"([^"]+)"/i) ||
+      withoutFences.match(/"reason"\s*:\s*"([^"]+)"/i);
+    if (reasoningMatch && reasoningMatch[1]) {
+      return reasoningMatch[1].trim();
     }
   } catch {
     // Not JSON; fall through to trimmed text

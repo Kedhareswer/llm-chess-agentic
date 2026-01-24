@@ -1,4 +1,4 @@
-const K = 32;
+import { ELO_CONFIG } from "./config";
 
 type GameOutcome = "win" | "loss" | "draw";
 
@@ -16,7 +16,7 @@ export function calculateNewElo(
 
   const actual = outcome === "win" ? 1 : outcome === "draw" ? 0.5 : 0;
 
-  const change = Math.round(K * (actual - expected));
+  const change = Math.round(ELO_CONFIG.K_FACTOR * (actual - expected));
   const newRating = playerRating + change;
 
   return { newRating, change };

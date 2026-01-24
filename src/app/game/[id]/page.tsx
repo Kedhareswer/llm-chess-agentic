@@ -1,11 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { Chessboard } from "react-chessboard";
 import { ReasoningPanel } from "@/components/reasoning-panel";
 import { EvalBar } from "@/components/eval-bar";
 import type { Game, Move, Model } from "@/db/schema";
+import { formatElapsed } from "@/lib/utils";
+import { useDebouncedCallback } from "@/hooks/use-debounced-callback";
+import { useGameData } from "@/hooks/use-game-data";
+import { POLLING_INTERVALS } from "@/lib/config";
 
 interface GameData {
   game: Game;
@@ -16,55 +20,27 @@ interface GameData {
 
 export default function GamePage() {
   const params = useParams();
-  const [data, setData] = useState<GameData | null>(null);
-  const [elapsed, setElapsed] = useState("00:00");
   const [tickInfo, setTickInfo] = useState<string | null>(null);
-
-  function formatElapsed(ms: number) {
-    const totalSec = Math.max(0, Math.floor(ms / 1000));
-    const hours = Math.floor(totalSec / 3600);
-    const mins = Math.floor((totalSec % 3600) / 60);
-    const secs = totalSec % 60;
-    if (hours > 0) return `${hours.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-  }
+  const [elapsed, setElapsed] = useState("00:00");
 
   const gameId = params.id as string;
-
-  const fetchGame = useCallback(async () => {
-    if (!gameId) return;
-    const res = await fetch(`/api/games/${gameId}`);
-    const gameData = await res.json();
-    setData(gameData);
-  }, [gameId]);
-
-  useEffect(() => {
-    if (!gameId) return;
-
-    fetchGame();
-    const interval = setInterval(fetchGame, 5000);
-    const timer = setInterval(() => {
-      setData((prev) => {
-        if (!prev?.game?.startedAt) return prev;
-        const started = new Date(prev.game.startedAt).getTime();
-        setElapsed(formatElapsed(Date.now() - started));
-        return prev;
-      });
-    }, 1000);
-    return () => {
-      clearInterval(interval);
-      clearInterval(timer);
-    };
-  }, [gameId, fetchGame]);
-
+  
+  const { data, loading, error, refetch } = useGameData(gameId, POLLING_INTERVALS.GAME_REFRESH_MS);
+  
   useEffect(() => {
     if (data?.game?.startedAt) {
       const started = new Date(data.game.startedAt).getTime();
       setElapsed(formatElapsed(Date.now() - started));
+      
+      const timer = setInterval(() => {
+        setElapsed(formatElapsed(Date.now() - started));
+      }, 1000);
+      
+      return () => clearInterval(timer);
     }
   }, [data?.game?.startedAt]);
 
-  async function handleTickOnce() {
+  const handleTickOnce = useDebouncedCallback(async () => {
     setTickInfo(null);
     try {
       const res = await fetch("/api/cron/tick");
@@ -74,16 +50,32 @@ export default function GamePage() {
         return;
       }
       setTickInfo("Ticked");
-      await fetchGame();
+      await refetch();
     } catch (e) {
       setTickInfo(`Tick error: ${e instanceof Error ? e.message : String(e)}`);
     }
-  }
+  }, 1000); // 1 second debounce
 
-  if (!data || !data.white || !data.black) {
+  if (loading || !data || !data.white || !data.black) {
     return (
       <div className="flex items-center justify-center h-96">
         <span className="text-gray-500">Loading...</span>
+      </div>
+    );
+  }
+  
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="text-center">
+          <span className="text-red-500">Error loading game: {error.message}</span>
+          <button 
+            className="mt-2 px-4 py-2 border border-black"
+            onClick={() => refetch()}
+          >
+            Retry
+          </button>
+        </div>
       </div>
     );
   }

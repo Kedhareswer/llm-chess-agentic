@@ -1,4 +1,5 @@
 import { pgTable, text, integer, uuid, timestamp, pgEnum, boolean } from "drizzle-orm/pg-core";
+import { STARTING_FEN } from "@/lib/chess";
 
 export const tournamentStatusEnum = pgEnum("tournament_status", ["stopped", "running"]);
 export const gameStatusEnum = pgEnum("game_status", ["active", "complete"]);
@@ -21,12 +22,14 @@ export const games = pgTable("games", {
   whiteId: text("white_id").notNull().references(() => models.id),
   blackId: text("black_id").notNull().references(() => models.id),
   pgn: text("pgn").notNull().default(""),
-  fen: text("fen").notNull().default("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"),
+  fen: text("fen").notNull().default(STARTING_FEN),
   status: gameStatusEnum("status").notNull().default("active"),
   result: gameResultEnum("result"),
   resultReason: text("result_reason"),
   startedAt: timestamp("started_at").notNull().defaultNow(),
   endedAt: timestamp("ended_at"),
+  whiteTimeoutWarnings: integer("white_timeout_warnings").notNull().default(0),
+  blackTimeoutWarnings: integer("black_timeout_warnings").notNull().default(0),
 });
 
 export const moves = pgTable("moves", {

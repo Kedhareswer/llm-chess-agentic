@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { tournament, games } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { processGame, matchmake } from "@/lib/game-processor";
+import { processGame } from "@/lib/game-processor";
 
 async function handleTick(request: Request) {
   // Allow all tick requests - manual ticks from UI need to work without auth
@@ -23,9 +23,6 @@ async function handleTick(request: Request) {
 
   // Process all games in parallel
   await Promise.all(activeGames.map(game => processGame(game)));
-
-  // Matchmake idle models
-  await matchmake();
 
   // Increment tick count and update lastTickAt
   await db

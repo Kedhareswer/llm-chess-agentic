@@ -4,11 +4,10 @@ import { eq } from "drizzle-orm";
 import { validateMove, applyMove, getLegalMoves, getTurn, isGameOver, getGameResult, getMoveNumber } from "./chess";
 import { requestMove } from "./ai";
 import { calculateNewElo, outcomeFromResult } from "./elo";
+import { GAME_RULES } from "./config";
 import type { Game } from "@/db/schema";
-import { getGroqApiKey, getGeminiApiKey } from "@/lib/groq-key-store";
-
-// Track consecutive timeouts per game/side (white/black). Two strikes => forfeit.
-const timeoutWarnings: Map<string, { white: number; black: number }> = new Map();
+import { getGroqApiKey, getGeminiApiKey } from "@/lib/api-key-store";
+import { APIKeyError, RateLimitError, TimeoutError, ParseError } from "./errors";
 
 // Track games currently being processed to prevent race conditions
 const processingGames: Set<string> = new Set();
@@ -30,7 +29,7 @@ export async function processGame(game: Game): Promise<void> {
     }
 
   // TTL: end games older than 25 minutes as draw
-  if (currentGame.startedAt && Date.now() - new Date(currentGame.startedAt).getTime() > 25 * 60 * 1000) {
+  if (currentGame.startedAt && Date.now() - new Date(currentGame.startedAt).getTime() > GAME_RULES.GAME_TIME_LIMIT_MS) {
     await endGame(currentGame, "1/2-1/2", "Game exceeded 25 minute time limit");
     return;
   }
@@ -67,55 +66,66 @@ export async function processGame(game: Game): Promise<void> {
       lastMoves: recentMoves.map(m => m.moveSan),
     }, modelId, { groqApiKey, geminiApiKey });
   } catch (err) {
-    const error = err instanceof Error ? err : new Error(String(err));
-    console.error(`[processGame] Move request failed for ${modelId}:`, error);
+    console.error(`[processGame] Move request failed for ${modelId}:`, err);
     
-    // Check if it's an API key error
-    if (error.message.includes("401") || error.message.includes("403") || 
-        error.message.includes("API key") || error.message.includes("Unauthorized")) {
+    // Handle fatal errors that should end the game
+    if (err instanceof APIKeyError) {
       console.error(`[processGame] API key error detected for ${modelId}, destroying match`);
-      await endGame(currentGame, "1/2-1/2", `Match cancelled: Invalid API key for ${modelId}`);
+      await endGame(currentGame, "1/2-1/2", `Match cancelled: ${err.message}`);
       return;
     }
     
-    // Check if it's a rate limit error
-    if (error.message.includes("429") || error.message.includes("rate limit") || 
-        error.message.includes("quota exceeded")) {
+    if (err instanceof RateLimitError) {
       console.error(`[processGame] Rate limit error detected for ${modelId}, destroying match`);
-      await endGame(currentGame, "1/2-1/2", `Match cancelled: API rate limit exceeded for ${modelId}`);
+      await endGame(currentGame, "1/2-1/2", `Match cancelled: ${err.message}`);
       return;
     }
     
-    moveResponse = null;
-    timedOutOrFailed = true;
+    // Handle non-fatal errors as timeouts/invalid moves
+    if (err instanceof TimeoutError || err instanceof ParseError) {
+      moveResponse = null;
+      timedOutOrFailed = true;
+    } else {
+      // Unexpected error - rethrow
+      throw err;
+    }
   }
 
   // Handle timeout/invalid: warn once, forfeit on second consecutive failure for that side
   if (!moveResponse) {
-    const counts = timeoutWarnings.get(currentGame.id) || { white: 0, black: 0 };
-    const key = color === "white" ? "white" : "black";
-    counts[key] += 1;
-    timeoutWarnings.set(currentGame.id, counts);
-    console.warn(`[processGame] Timeout/invalid for ${modelId}. Warnings ${counts.white}/${counts.black}`);
+    // Increment timeout warning for the current player
+    const currentWarnings = color === "white" ? currentGame.whiteTimeoutWarnings : currentGame.blackTimeoutWarnings;
+    const newWarningCount = currentWarnings + 1;
+    
+    // Update the game with the new warning count
+    await db
+      .update(games)
+      .set(color === "white" 
+        ? { whiteTimeoutWarnings: newWarningCount } 
+        : { blackTimeoutWarnings: newWarningCount })
+      .where(eq(games.id, currentGame.id));
+      
+    console.warn(`[processGame] Timeout/invalid for ${modelId}. Warnings ${currentGame.whiteTimeoutWarnings + (color === "white" ? 1 : 0)}/${currentGame.blackTimeoutWarnings + (color === "black" ? 1 : 0)}`);
 
-    if (counts[key] >= 2) {
+    if (newWarningCount >= 2) {
       console.error(`[processGame] Forfeiting ${modelId} due to repeated timeout/invalid`);
       await forfeitGame(currentGame, modelId, "Repeated timeout or invalid moves");
-      timeoutWarnings.delete(currentGame.id);
     }
     return;
   } else {
     // Successful move clears warning for that side
-    const counts = timeoutWarnings.get(currentGame.id);
-    if (counts) {
-      const key = color === "white" ? "white" : "black";
-      counts[key] = 0;
-      // If both zero, remove entry
-      if (counts.white === 0 && counts.black === 0) {
-        timeoutWarnings.delete(currentGame.id);
-      } else {
-        timeoutWarnings.set(currentGame.id, counts);
-      }
+    const updates: Partial<typeof games.$inferInsert> = {};
+    if (color === "white" && currentGame.whiteTimeoutWarnings > 0) {
+      updates.whiteTimeoutWarnings = 0;
+    } else if (color === "black" && currentGame.blackTimeoutWarnings > 0) {
+      updates.blackTimeoutWarnings = 0;
+    }
+    
+    if (Object.keys(updates).length > 0) {
+      await db
+        .update(games)
+        .set(updates)
+        .where(eq(games.id, currentGame.id));
     }
   }
 
@@ -170,7 +180,6 @@ export async function processGame(game: Game): Promise<void> {
 // prompt clearly says the previous move was invalid and listing the legal moves.
 // If all attempts fail (timeouts, invalid, parse errors), it throws so the caller
 // can handle warnings/forfeits.
-const MAX_JUDGE_ATTEMPTS = 3;
 
 function extractReasoning(raw: string | undefined): string {
   if (!raw) return "No reasoning provided";
@@ -178,13 +187,41 @@ function extractReasoning(raw: string | undefined): string {
 
   // If the model returned a JSON-looking blob, try to pull the reasoning field out of it.
   try {
-    const maybeJson = trimmed.replace(/^```json\s*/i, "").replace(/```\s*$/i, "");
-    const parsed = JSON.parse(maybeJson);
-    if (parsed && typeof parsed === "object") {
-      if (typeof parsed.reasoning === "string") return parsed.reasoning;
-      if (typeof parsed.reason === "string") return parsed.reason;
-      // If the JSON itself is just a string, return it
-      if (typeof parsed === "string") return parsed;
+    // 1) Strip common ```json ... ``` wrappers even if they include leading/trailing whitespace
+    const withoutFences = trimmed
+      .replace(/^```json\s*/i, "")
+      .replace(/^```\s*/i, "")
+      .replace(/```\s*$/i, "");
+
+    const directCandidates: string[] = [];
+
+    // a) Try the whole string first
+    directCandidates.push(withoutFences);
+
+    // b) Try to extract a JSON object from inside a larger string
+    const objectMatch = withoutFences.match(/\{[\s\S]*?\}/);
+    if (objectMatch) {
+      directCandidates.push(objectMatch[0]);
+    }
+
+    for (const candidate of directCandidates) {
+      try {
+        const parsed = JSON.parse(candidate);
+        if (parsed && typeof parsed === "object") {
+          if (typeof (parsed as any).reasoning === "string") return (parsed as any).reasoning.trim();
+          if (typeof (parsed as any).reason === "string") return (parsed as any).reason.trim();
+          if (typeof parsed === "string") return (parsed as string).trim();
+        }
+      } catch {
+        // Try next candidate
+      }
+    }
+
+    // c) Heuristic: extract a reasoning-like field from text that still looks JSON-ish
+    const reasoningMatch = withoutFences.match(/"reasoning"\s*:\s*"([^"]+)"/i) ||
+      withoutFences.match(/"reason"\s*:\s*"([^"]+)"/i);
+    if (reasoningMatch && reasoningMatch[1]) {
+      return reasoningMatch[1].trim();
     }
   } catch {
     // Not JSON, fall through
@@ -205,8 +242,8 @@ async function judgeMoveForTurn(
 ) {
   let errorContext: string | undefined;
 
-  for (let attempt = 1; attempt <= MAX_JUDGE_ATTEMPTS; attempt++) {
-    console.log(`[judgeMoveForTurn] Attempt ${attempt}/${MAX_JUDGE_ATTEMPTS} for ${modelId}`);
+  for (let attempt = 1; attempt <= GAME_RULES.MAX_JUDGE_ATTEMPTS; attempt++) {
+    console.log(`[judgeMoveForTurn] Attempt ${attempt}/${GAME_RULES.MAX_JUDGE_ATTEMPTS} for ${modelId}`);
     let response;
     try {
       response = await requestMove(
@@ -236,7 +273,7 @@ async function judgeMoveForTurn(
     }
   }
 
-  throw new Error(`Judge failed: ${modelId} did not produce a legal move after ${MAX_JUDGE_ATTEMPTS} attempts`);
+  throw new Error(`Judge failed: ${modelId} did not produce a legal move after ${GAME_RULES.MAX_JUDGE_ATTEMPTS} attempts`);
 }
 
 async function forfeitGame(game: Game, forfeitingModelId: string, reason: string): Promise<void> {
@@ -291,8 +328,4 @@ async function endGame(game: Game, result: "1-0" | "0-1" | "1/2-1/2", reason: st
     .update(games)
     .set({ status: "complete", result, resultReason: reason, endedAt: new Date() })
     .where(eq(games.id, game.id));
-}
-
-export async function matchmake(): Promise<void> {
-  return;
 }

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useRef } from "react";
 import type { Model } from "@/db/schema";
+import { POLLING_INTERVALS } from "@/lib/config";
 
 // Track ELO changes for animations
 interface EloChange {
@@ -99,7 +100,7 @@ export function Leaderboard() {
     }
 
     fetchLeaderboard();
-    const interval = setInterval(fetchLeaderboard, 5000);
+    const interval = setInterval(fetchLeaderboard, POLLING_INTERVALS.LEADERBOARD_REFRESH_MS);
     return () => clearInterval(interval);
   }, []);
 

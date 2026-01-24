@@ -23,7 +23,7 @@ async function simulate(whiteId: string, blackId: string, maxPlies = 40) {
   }
 
   const gameId = randomUUID();
-  await db.insert(games).values({ id: gameId, whiteId, blackId, status: "active", startedAt: new Date() });
+  await db.insert(games).values({ id: gameId, whiteId, blackId, status: "active", startedAt: new Date(), whiteTimeoutWarnings: 0, blackTimeoutWarnings: 0 });
   await db.update(tournament).set({ status: "running", startedAt: new Date() }).where(eq(tournament.id, 1));
 
   const [created] = await db.select().from(games).where(eq(games.id, gameId));
