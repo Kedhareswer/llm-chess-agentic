@@ -111,7 +111,7 @@ async function callGeminiNonStreaming(model: string, prompt: string, apiKey: str
     model: google(model),
     prompt,
     temperature: 0.5,
-    maxTokens: 200, // Limit response size for faster generation
+    maxOutputTokens: 200, // Limit response size for faster generation
   }).then(result => result.text);
   
   return withTimeout(textPromise, timeoutMs, `Gemini request for ${model}`);
