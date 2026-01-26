@@ -196,7 +196,11 @@ export function Leaderboard() {
       const res = await fetch("/api/games/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ modelIds: selectedIds.slice(0, 2) }),
+        body: JSON.stringify({ 
+          modelIds: selectedIds.slice(0, 2),
+          groqApiKey: groqKey.trim() || undefined,
+          geminiApiKey: geminiKey.trim() || undefined,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {

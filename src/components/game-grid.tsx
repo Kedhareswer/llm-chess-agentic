@@ -124,7 +124,7 @@ export function GameGrid() {
     return () => clearInterval(interval);
   }, []);
 
-  // Automatic tick heartbeat - every 3s check for active games and tick once
+  // Automatic tick heartbeat - use configured interval
   useEffect(() => {
     const tickInterval = setInterval(async () => {
       try {
@@ -136,25 +136,36 @@ export function GameGrid() {
       } catch {
         // Silently ignore tick errors
       }
-    }, 3000);
+    }, POLLING_INTERVALS.AUTO_TICK_MS);
 
     return () => clearInterval(tickInterval);
   }, []);
 
   // Keep elapsed timer in sync with the current game's start time without recreating each second
   const startedAt = games[0]?.startedAt;
+  const gameStatus = games[0]?.status;
+  const endedAt = games[0]?.endedAt;
   useEffect(() => {
     if (!startedAt) {
       setElapsed("00:00");
       return;
     }
     const started = new Date(startedAt).getTime();
-    setElapsed(formatElapsed(Date.now() - started));
-    const timer = setInterval(() => {
-      setElapsed(formatElapsed(Date.now() - started));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [startedAt]);
+    
+    // If game is complete, use endedAt; otherwise use current time
+    const isComplete = gameStatus === "complete" && endedAt;
+    const endTime = isComplete ? new Date(endedAt).getTime() : Date.now();
+    
+    setElapsed(formatElapsed(endTime - started));
+    
+    // Only update timer if game is still active
+    if (!isComplete) {
+      const timer = setInterval(() => {
+        setElapsed(formatElapsed(Date.now() - started));
+      }, 1000);
+      return () => clearInterval(timer);
+    }
+  }, [startedAt, gameStatus, endedAt]);
 
   async function handleDestroy() {
     setDestroying(true);
@@ -309,29 +320,41 @@ export function GameGrid() {
                     }}
                   />
                   {game.result && (
-                    <div className="border-2 border-t-0 border-black p-2 bg-gray-50">
-                      <div className="flex flex-col gap-1">
-                        {game.result === "1-0" && (
-                          <span className={`text-xs font-bold text-green-700 flex items-center gap-1 ${isRecentlyEnded ? "animate-victory-white" : ""}`}>
-                            <span className="inline-block">🏆</span> White wins
+                    <div className="border-2 border-t-0 border-black p-3 bg-gradient-to-br from-gray-50 to-gray-100">
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center justify-between">
+                          {game.result === "1-0" && (
+                            <span className={`text-sm font-bold text-green-700 flex items-center gap-1 ${isRecentlyEnded ? "animate-victory-white" : ""}`}>
+                              <span className="inline-block text-base">🏆</span> 
+                              <span>{game.whiteModel?.name || "White"} wins</span>
+                            </span>
+                          )}
+                          {game.result === "0-1" && (
+                            <span className={`text-sm font-bold text-red-700 flex items-center gap-1 ${isRecentlyEnded ? "animate-victory-black" : ""}`}>
+                              <span className="inline-block text-base">🏆</span> 
+                              <span>{game.blackModel?.name || "Black"} wins</span>
+                            </span>
+                          )}
+                          {game.result === "1/2-1/2" && (
+                            <span className={`text-sm font-bold text-gray-700 flex items-center gap-1 ${isRecentlyEnded ? "animate-draw" : ""}`}>
+                              <span className="inline-block text-base">🤝</span> Draw
+                            </span>
+                          )}
+                          <span className="text-xs font-mono font-semibold text-gray-700 bg-white px-2 py-1 border border-gray-300">
+                            {game.result}
                           </span>
-                        )}
-                        {game.result === "0-1" && (
-                          <span className={`text-xs font-bold text-red-700 flex items-center gap-1 ${isRecentlyEnded ? "animate-victory-black" : ""}`}>
-                            <span className="inline-block">🏆</span> Black wins
-                          </span>
-                        )}
-                        {game.result === "1/2-1/2" && (
-                          <span className={`text-xs font-bold text-gray-700 flex items-center gap-1 ${isRecentlyEnded ? "animate-draw" : ""}`}>
-                            <span className="inline-block">🤝</span> Draw
-                          </span>
-                        )}
+                        </div>
                         {game.resultReason && (
-                          <p className="text-[10px] text-gray-600 leading-tight">{game.resultReason}</p>
+                          <div className="bg-white border border-gray-300 p-2 rounded">
+                            <p className="text-xs font-semibold text-gray-700 mb-1">Reason:</p>
+                            <p className="text-xs text-gray-800 leading-relaxed">{game.resultReason}</p>
+                          </div>
                         )}
-                        <span className="text-[10px] text-gray-500">
-                          {game.endedAt && new Date(game.endedAt).toLocaleString()}
-                        </span>
+                        {game.endedAt && (
+                          <div className="text-[10px] text-gray-500 border-t border-gray-300 pt-2">
+                            Finished: {new Date(game.endedAt).toLocaleString()}
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}

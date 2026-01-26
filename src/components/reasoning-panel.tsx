@@ -5,6 +5,9 @@ interface ReasoningPanelProps {
   moves: Move[];
   color: "white" | "black";
   isThinking?: boolean;
+  selectedMoveId?: string | null;
+  onMoveClick?: (moveId: string) => void;
+  onViewSnapshot?: (fen: string) => void;
 }
 
 function normalizeReasoning(text: string | undefined): string {
@@ -60,17 +63,32 @@ const PROVIDER_CONFIG: Record<string, { bg: string; bgLight: string; text: strin
   meta: { bg: "#0ea5e9", bgLight: "#e0f2fe", text: "#0369a1", border: "#0ea5e9", symbol: "◎" },
 };
 
-export function ReasoningPanel({ model, moves, color, isThinking }: ReasoningPanelProps) {
+export function ReasoningPanel({ 
+  model, 
+  moves, 
+  color, 
+  isThinking,
+  selectedMoveId,
+  onMoveClick,
+  onViewSnapshot,
+}: ReasoningPanelProps) {
   const modelMoves = moves.filter((m) => m.modelId === model.id);
   const latestMove = modelMoves[modelMoves.length - 1];
   const config = PROVIDER_CONFIG[model.provider] || PROVIDER_CONFIG.openai;
 
-  const latestReasoningRaw = latestMove?.reasoning;
-  const latestReasoning = normalizeReasoning(latestReasoningRaw);
-  const hasJudgeWarning = latestReasoningRaw?.includes("⚠ Judge retry");
+  // Get selected move or use latest
+  const selectedMove = selectedMoveId 
+    ? modelMoves.find(m => m.id === selectedMoveId) 
+    : latestMove;
+
+  const selectedReasoningRaw = selectedMove?.reasoning;
+  const selectedReasoning = normalizeReasoning(selectedReasoningRaw);
+  const hasJudgeWarning = selectedReasoningRaw?.includes("⚠ Judge retry");
   const displayReasoning = hasJudgeWarning
-    ? latestReasoning.replace(/\s*⚠ Judge retry.*$/, "").trim() + " (Judge warned)"
-    : latestReasoning;
+    ? selectedReasoning.replace(/\s*⚠ Judge retry.*$/, "").trim() + " (Judge warned)"
+    : selectedReasoning;
+
+  const isSelectedMove = selectedMoveId && selectedMoveId === selectedMove?.id;
 
   return (
     <div style={{ display: "flex", height: "100%", flexDirection: "column", backgroundColor: "white" }}>
@@ -127,18 +145,23 @@ export function ReasoningPanel({ model, moves, color, isThinking }: ReasoningPan
         </div>
       )}
 
-      {/* Latest move & reasoning */}
-      {latestMove ? (
+      {/* Selected/Latest move & reasoning */}
+      {selectedMove ? (
         <div
           style={{ backgroundColor: config.bgLight, borderBottom: `2px solid ${config.border}`, padding: "12px 16px" }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "10px" }}>
             <span style={{ color: config.text, fontSize: "32px", fontWeight: 900 }}>
-              {latestMove.moveSan}
+              {selectedMove.moveSan}
             </span>
             <span style={{ color: config.text, fontSize: "12px", opacity: 0.7 }}>
-              move {latestMove.moveNumber}
+              move {selectedMove.moveNumber}
             </span>
+            {isSelectedMove && selectedMove !== latestMove && (
+              <span style={{ color: config.text, fontSize: "10px", opacity: 0.6, fontStyle: "italic" }}>
+                (selected)
+              </span>
+            )}
           </div>
           <div style={{ backgroundColor: "white", borderRadius: "8px", padding: "10px", boxShadow: "0 1px 2px rgba(0,0,0,0.05)", position: "relative" }}>
             <div style={{ color: config.text, fontSize: "10px", fontWeight: "bold", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: "8px" }}>
@@ -150,6 +173,28 @@ export function ReasoningPanel({ model, moves, color, isThinking }: ReasoningPan
               )}
             </div>
             <p style={{ fontSize: "13px", color: "#374151", lineHeight: 1.5, margin: 0, whiteSpace: "pre-wrap" }}>{displayReasoning}</p>
+            {isSelectedMove && selectedMove.fenAfter && onViewSnapshot && (
+              <button
+                onClick={() => onViewSnapshot(selectedMove.fenAfter)}
+                style={{
+                  marginTop: "10px",
+                  width: "100%",
+                  padding: "8px",
+                  backgroundColor: config.bg,
+                  color: "white",
+                  border: "none",
+                  borderRadius: "6px",
+                  fontSize: "12px",
+                  fontWeight: "bold",
+                  cursor: "pointer",
+                  transition: "opacity 0.2s",
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.opacity = "0.8"}
+                onMouseLeave={(e) => e.currentTarget.style.opacity = "1"}
+              >
+                View Snapshot
+              </button>
+            )}
           </div>
         </div>
       ) : (
@@ -172,32 +217,59 @@ export function ReasoningPanel({ model, moves, color, isThinking }: ReasoningPan
             {modelMoves
               .slice()
               .reverse()
-              .map((move, idx) => (
-                <div
-                  key={move.id}
-                  style={{ backgroundColor: idx === 0 ? config.bgLight : "#f9fafb", padding: "8px 10px", borderRadius: "6px" }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <span
-                      style={{ color: idx === 0 ? config.text : "#4b5563", fontFamily: "monospace", fontWeight: "bold", fontSize: "14px" }}
-                    >
-                      {move.moveNumber}.
-                    </span>
-                    <span
-                      style={{ color: idx === 0 ? config.text : "#374151", fontWeight: 600, fontSize: "14px" }}
-                    >
-                      {move.moveSan}
-                    </span>
+              .map((move, idx) => {
+                const isLatest = idx === 0;
+                const isSelected = selectedMoveId === move.id;
+                const isClickable = onMoveClick !== undefined;
+                
+                return (
+                  <div
+                    key={move.id}
+                    onClick={() => isClickable && onMoveClick(move.id)}
+                    style={{ 
+                      backgroundColor: isSelected ? config.bgLight : isLatest ? config.bgLight : "#f9fafb", 
+                      padding: "8px 10px", 
+                      borderRadius: "6px",
+                      cursor: isClickable ? "pointer" : "default",
+                      border: isSelected ? `2px solid ${config.border}` : "2px solid transparent",
+                      transition: "all 0.2s",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (isClickable && !isSelected) {
+                        e.currentTarget.style.backgroundColor = "#f3f4f6";
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (isClickable && !isSelected) {
+                        e.currentTarget.style.backgroundColor = isLatest ? config.bgLight : "#f9fafb";
+                      }
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <span
+                        style={{ color: isSelected || isLatest ? config.text : "#4b5563", fontFamily: "monospace", fontWeight: "bold", fontSize: "14px" }}
+                      >
+                        {move.moveNumber}.
+                      </span>
+                      <span
+                        style={{ color: isSelected || isLatest ? config.text : "#374151", fontWeight: 600, fontSize: "14px" }}
+                      >
+                        {move.moveSan}
+                      </span>
+                      {isSelected && (
+                        <span style={{ fontSize: "10px", color: config.text, opacity: 0.7 }}>✓</span>
+                      )}
+                    </div>
+                    {(isLatest || isSelected) && (
+                      <p
+                        style={{ fontSize: "12px", color: "#6b7280", marginTop: "6px", marginBottom: 0, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", whiteSpace: "pre-wrap" }}
+                      >
+                        {normalizeReasoning(move.reasoning)}
+                      </p>
+                    )}
                   </div>
-                  {idx === 0 && (
-                    <p
-                      style={{ fontSize: "12px", color: "#6b7280", marginTop: "6px", marginBottom: 0, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", whiteSpace: "pre-wrap" }}
-                    >
-                      {normalizeReasoning(move.reasoning)}
-                    </p>
-                  )}
-                </div>
-              ))}
+                );
+              })}
           </div>
         ) : (
           <div style={{ fontSize: "13px", color: "#9ca3af", fontStyle: "italic" }}>No moves yet</div>

@@ -10,16 +10,26 @@ import { getGroqApiKey, getGeminiApiKey } from "@/lib/api-key-store";
 import { APIKeyError, RateLimitError, TimeoutError, ParseError } from "./errors";
 
 // Track games currently being processed to prevent race conditions
-const processingGames: Set<string> = new Set();
+// Map of gameId -> timestamp when processing started
+const processingGames: Map<string, number> = new Map();
+const PROCESSING_TIMEOUT_MS = 20_000; // Release lock if processing takes > 20 seconds
 
 export async function processGame(game: Game): Promise<void> {
-  // Prevent concurrent processing of the same game
-  if (processingGames.has(game.id)) {
-    console.log(`[processGame] Game ${game.id} already being processed, skipping`);
-    return;
+  // Check if game is being processed, but allow retry if it's been stuck too long
+  const processingStart = processingGames.get(game.id);
+  if (processingStart) {
+    const elapsed = Date.now() - processingStart;
+    if (elapsed < PROCESSING_TIMEOUT_MS) {
+      console.log(`[processGame] Game ${game.id} already being processed (${elapsed}ms elapsed), skipping`);
+      return;
+    } else {
+      // Lock has been held too long - likely stuck, release it
+      console.warn(`[processGame] Game ${game.id} processing lock expired after ${elapsed}ms, releasing and retrying`);
+      processingGames.delete(game.id);
+    }
   }
 
-  processingGames.add(game.id);
+  processingGames.set(game.id, Date.now());
 
   try {
     // Re-fetch game to check if still active (protect against concurrent ticks)
@@ -34,13 +44,28 @@ export async function processGame(game: Game): Promise<void> {
     return;
   }
 
-  const groqApiKey = getGroqApiKey();
-  const geminiApiKey = getGeminiApiKey();
+  // Use game-specific API keys if available, otherwise fall back to global keys
+  const groqApiKey = currentGame.groqApiKey || getGroqApiKey();
+  const geminiApiKey = currentGame.geminiApiKey || getGeminiApiKey();
   console.log(`[processGame] Game ${currentGame.id}, groqApiKey present: ${!!groqApiKey}, geminiKey present: ${!!geminiApiKey}`);
 
   const turn = getTurn(currentGame.fen);
   const modelId = turn === "w" ? currentGame.whiteId : currentGame.blackId;
   const color = turn === "w" ? "white" : "black";
+  
+  // Check if required API key is available before attempting move
+  const isGroq = modelId.startsWith("groq/");
+  const isGoogle = modelId.startsWith("google/");
+  if (isGroq && !groqApiKey) {
+    console.error(`[processGame] Missing Groq API key for ${modelId}, ending game`);
+    await endGame(currentGame, "1/2-1/2", `Match cancelled: Missing Groq API key`);
+    return;
+  }
+  if (isGoogle && !geminiApiKey) {
+    console.error(`[processGame] Missing Gemini API key for ${modelId}, ending game`);
+    await endGame(currentGame, "1/2-1/2", `Match cancelled: Missing Gemini API key`);
+    return;
+  }
 
   // Get recent moves for context
   const recentMoves = await db
@@ -83,6 +108,12 @@ export async function processGame(game: Game): Promise<void> {
     
     // Handle non-fatal errors as timeouts/invalid moves
     if (err instanceof TimeoutError || err instanceof ParseError) {
+      moveResponse = null;
+      timedOutOrFailed = true;
+    } else if (err instanceof Error && err.message.includes("Judge failed")) {
+      // If judge failed after multiple attempts, treat as timeout/parse error
+      // This happens when all attempts timeout or fail to parse
+      console.warn(`[processGame] Judge failed for ${modelId}, treating as timeout/invalid`);
       moveResponse = null;
       timedOutOrFailed = true;
     } else {
@@ -169,9 +200,20 @@ export async function processGame(game: Game): Promise<void> {
     const reason = gameResult === "1/2-1/2" ? "Draw by stalemate or insufficient material" : "Checkmate";
     await endGame(currentGame, gameResult!, reason);
   }
+  } catch (error) {
+    // Log unexpected errors but don't let them crash the tick
+    console.error(`[processGame] Unexpected error processing game ${game.id}:`, error);
+    // Lock will be released in finally block
   } finally {
-    // Always release the lock
-    processingGames.delete(game.id);
+    // Always release the lock, even on errors
+    const processingTime = processingGames.get(game.id);
+    if (processingTime) {
+      const elapsed = Date.now() - processingTime;
+      processingGames.delete(game.id);
+      if (elapsed > 10_000) {
+        console.warn(`[processGame] Game ${game.id} took ${elapsed}ms to process (unusually long)`);
+      }
+    }
   }
 }
 
@@ -241,6 +283,9 @@ async function judgeMoveForTurn(
   keys: { groqApiKey?: string; geminiApiKey?: string },
 ) {
   let errorContext: string | undefined;
+  let lastFatalError: Error | null = null;
+  let lastTimeoutError: TimeoutError | null = null;
+  let lastParseError: ParseError | null = null;
 
   for (let attempt = 1; attempt <= GAME_RULES.MAX_JUDGE_ATTEMPTS; attempt++) {
     console.log(`[judgeMoveForTurn] Attempt ${attempt}/${GAME_RULES.MAX_JUDGE_ATTEMPTS} for ${modelId}`);
@@ -268,9 +313,39 @@ async function judgeMoveForTurn(
       errorContext = `Your previous move "${response.move}" was ILLEGAL. You MUST choose exactly one move from this list of legal moves: ${baseParams.legalMoves.join(", ")}. Do not repeat an illegal move; strictly pick one legal move.`;
     } catch (err) {
       console.warn(`[judgeMoveForTurn] Error from requestMove for ${modelId}:`, err);
+      
+      // If it's a fatal error (API key, rate limit), throw it immediately - don't retry
+      if (err instanceof APIKeyError || err instanceof RateLimitError) {
+        throw err;
+      }
+      
+      // Track specific error types for better error propagation
+      if (err instanceof TimeoutError) {
+        lastTimeoutError = err;
+      } else if (err instanceof ParseError) {
+        lastParseError = err;
+      } else {
+        lastFatalError = err instanceof Error ? err : new Error(String(err));
+      }
+      
       errorContext = `Failed to get a valid response. You MUST pick one legal move from: ${baseParams.legalMoves.join(", ")}. Do not repeat illegal or malformed moves.`;
       continue;
     }
+  }
+
+  // If we had a fatal error in all attempts, throw that instead of generic error
+  if (lastFatalError instanceof APIKeyError || lastFatalError instanceof RateLimitError) {
+    throw lastFatalError;
+  }
+  
+  // If all attempts were timeouts, throw the timeout error so it's handled properly
+  if (lastTimeoutError) {
+    throw lastTimeoutError;
+  }
+  
+  // If all attempts were parse errors, throw the parse error
+  if (lastParseError) {
+    throw lastParseError;
   }
 
   throw new Error(`Judge failed: ${modelId} did not produce a legal move after ${GAME_RULES.MAX_JUDGE_ATTEMPTS} attempts`);

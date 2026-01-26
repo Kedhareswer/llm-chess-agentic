@@ -4,6 +4,8 @@ import type { Game, Model, Move } from "@/db/schema";
 // Request schemas
 export const StartGameRequestSchema = z.object({
   modelIds: z.array(z.string()).min(2, "At least two models required"),
+  groqApiKey: z.string().optional(), // Optional API key for Groq models
+  geminiApiKey: z.string().optional(), // Optional API key for Gemini models
 });
 
 export const SetAPIKeyRequestSchema = z.object({

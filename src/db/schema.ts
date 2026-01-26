@@ -30,6 +30,8 @@ export const games = pgTable("games", {
   endedAt: timestamp("ended_at"),
   whiteTimeoutWarnings: integer("white_timeout_warnings").notNull().default(0),
   blackTimeoutWarnings: integer("black_timeout_warnings").notNull().default(0),
+  groqApiKey: text("groq_api_key"), // API key for Groq models in this game
+  geminiApiKey: text("gemini_api_key"), // API key for Gemini models in this game
 });
 
 export const moves = pgTable("moves", {

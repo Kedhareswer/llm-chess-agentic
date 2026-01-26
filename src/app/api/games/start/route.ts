@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     );
   }
   
-  const { modelIds } = validation.data;
+  const { modelIds, groqApiKey, geminiApiKey } = validation.data;
   const uniqueIds = Array.from(new Set(modelIds)).filter(Boolean);
   if (uniqueIds.length < 2) {
     return NextResponse.json({ error: "Select at least two models" }, { status: 400 });
@@ -63,6 +63,8 @@ export async function POST(request: Request) {
         blackId: black.id,
         status: "active",
         startedAt: new Date(),
+        groqApiKey: groqApiKey?.trim() || null,
+        geminiApiKey: geminiApiKey?.trim() || null,
       });
 
       return { gameId, white: white.id, black: black.id };

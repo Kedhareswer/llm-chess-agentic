@@ -1,11 +1,11 @@
-import { streamText, createGateway } from "ai";
+import { streamText, generateText, createGateway } from "ai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { z } from "zod";
 import { APIKeyError, RateLimitError, TimeoutError, ParseError } from "./errors";
 import { AI_TIMEOUTS } from "./config";
 
 // Timeout constants - keep under Vercel Hobby 10s limit
-// Gemini needs more time for initial response, but streaming helps
+// Non-streaming is simpler and more reliable for short JSON responses
 
 /**
  * Wraps a promise with a timeout that rejects with a TimeoutError if the
@@ -32,8 +32,8 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
 }
 
 /**
- * Makes a streaming API call to Groq with the provided parameters.
- * Collects response chunks until a valid JSON response is found or the stream ends.
+ * Makes a non-streaming API call to Groq with the provided parameters.
+ * Uses standard OpenAI-compatible API with stream: false for simpler, more reliable responses.
  * 
  * @param model - The Groq model identifier
  * @param prompt - The prompt to send to the model
@@ -41,7 +41,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
  * @param timeoutMs - The timeout in milliseconds
  * @returns The complete response text from the model
  */
-async function callGroqAPIStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number): Promise<string> {
+async function callGroqAPINonStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number): Promise<string> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   
@@ -56,7 +56,7 @@ async function callGroqAPIStreaming(model: string, prompt: string, apiKey: strin
         model,
         messages: [{ role: "user", content: prompt }],
         temperature: 0.5, // Lower temperature for more consistent JSON
-        stream: true,
+        stream: false, // Non-streaming for simpler handling
       }),
       signal: controller.signal,
     });
@@ -78,49 +78,22 @@ async function callGroqAPIStreaming(model: string, prompt: string, apiKey: strin
       throw new Error(`Groq API error ${response.status}: ${error}`);
     }
 
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error("No response body");
-
-    const decoder = new TextDecoder();
-    let fullText = "";
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || "";
     
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split("\n").filter(line => line.startsWith("data: "));
-      
-      for (const line of lines) {
-        const data = line.slice(6); // Remove "data: " prefix
-        if (data === "[DONE]") continue;
-        
-        try {
-          const parsed = JSON.parse(data);
-          const content = parsed.choices?.[0]?.delta?.content || "";
-          fullText += content;
-          
-          // Early exit: if we have valid JSON, stop streaming
-          const earlyParse = parseAIResponse(fullText);
-          if (earlyParse) {
-            reader.cancel();
-            return fullText;
-          }
-        } catch {
-          // Ignore JSON parse errors for SSE chunks
-        }
-      }
+    if (!content) {
+      throw new Error("Groq API returned empty response");
     }
     
-    return fullText;
+    return content;
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
 /**
- * Makes a streaming API call to Google Gemini with the provided parameters.
- * Uses the AI SDK for streaming responses.
+ * Makes a non-streaming API call to Google Gemini with the provided parameters.
+ * Uses generateText for simpler, more reliable responses (no streaming complexity).
  * 
  * @param model - The Gemini model identifier
  * @param prompt - The prompt to send to the model
@@ -128,30 +101,16 @@ async function callGroqAPIStreaming(model: string, prompt: string, apiKey: strin
  * @param timeoutMs - The timeout in milliseconds
  * @returns The complete response text from the model
  */
-async function callGeminiStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number): Promise<string> {
+async function callGeminiNonStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number): Promise<string> {
   const google = createGoogleGenerativeAI({ apiKey });
   
-  const streamPromise = (async () => {
-    const result = streamText({
-      model: google(model),
-      prompt,
-      temperature: 0.5,
-    });
-    
-    let fullText = "";
-    for await (const chunk of (await result).textStream) {
-      fullText += chunk;
-      
-      // Early exit: if we have valid JSON, stop streaming
-      const earlyParse = parseAIResponse(fullText);
-      if (earlyParse) {
-        return fullText;
-      }
-    }
-    return fullText;
-  })();
+  const textPromise = generateText({
+    model: google(model),
+    prompt,
+    temperature: 0.5,
+  }).then(result => result.text);
   
-  return withTimeout(streamPromise, timeoutMs, `Gemini streaming for ${model}`);
+  return withTimeout(textPromise, timeoutMs, `Gemini request for ${model}`);
 }
 
 // AI Gateway handles routing to all providers (OpenAI, Anthropic, Google, etc.)
@@ -362,20 +321,28 @@ export async function requestMove(
     `[requestMove] Model: ${modelId}, isGroq: ${isGroq}, isGoogle: ${isGoogle}, groqKey: ${!!groqApiKey}, geminiKey: ${!!geminiApiKey}`
   );
 
+  // Check for missing API keys BEFORE attempting requests
+  if (isGroq && !groqApiKey) {
+    throw new APIKeyError('Groq');
+  }
+  if (isGoogle && !geminiApiKey) {
+    throw new APIKeyError('Google');
+  }
+
   let lastError: Error | null = null;
   
-  // Try up to 2 attempts with streaming
+  // Try up to 2 attempts with non-streaming API calls
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       console.log(`[requestMove] Attempt ${attempt}/${retries} for ${modelId}`);
       let text: string;
       
       if (isGroq && groqApiKey) {
-        // Use streaming Groq API
-        text = await callGroqAPIStreaming(groqModel!, prompt, groqApiKey, AI_TIMEOUTS.GROQ_MS);
+        // Use non-streaming Groq API (simpler and more reliable)
+        text = await callGroqAPINonStreaming(groqModel!, prompt, groqApiKey, AI_TIMEOUTS.GROQ_MS);
       } else if (isGoogle && geminiApiKey) {
-        // Use streaming Gemini API
-        text = await callGeminiStreaming(googleModel!, prompt, geminiApiKey, AI_TIMEOUTS.GEMINI_MS);
+        // Use non-streaming Gemini API (more reliable for short JSON responses)
+        text = await callGeminiNonStreaming(googleModel!, prompt, geminiApiKey, AI_TIMEOUTS.GEMINI_MS);
       } else {
         // Use AI Gateway for other providers (non-streaming fallback)
         const streamPromise = (async () => {
@@ -413,6 +380,8 @@ export async function requestMove(
       
       // Detect and throw typed errors
       const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorCause = (error as any)?.cause;
+      const causeMessage = errorCause instanceof Error ? errorCause.message : String(errorCause || '');
       
       // Check if it's already a typed error - just pass it through
       if (error instanceof APIKeyError || error instanceof RateLimitError || 
@@ -423,10 +392,19 @@ export async function requestMove(
           throw error;
         }
       } else {
+        // Check for Gateway authentication errors (common when API keys are missing)
+        if (errorMessage.includes('Gateway') && (errorMessage.includes('authentication') || errorMessage.includes('401') || 
+            causeMessage.includes('authentication') || causeMessage.includes('401'))) {
+          const provider = isGroq ? 'Groq' : isGoogle ? 'Google' : 'Unknown';
+          lastError = new APIKeyError(provider, 401);
+          throw lastError;
+        }
+        
         // Detect API key errors from error messages
         if (errorMessage.includes('401') || errorMessage.includes('403') || 
             errorMessage.includes('Unauthorized') || errorMessage.includes('API key') ||
-            errorMessage.includes('Invalid API')) {
+            errorMessage.includes('Invalid API') || causeMessage.includes('401') || 
+            causeMessage.includes('403') || causeMessage.includes('Unauthorized')) {
           const provider = isGroq ? 'Groq' : isGoogle ? 'Google' : 'Unknown';
           lastError = new APIKeyError(provider);
           throw lastError;
@@ -434,7 +412,8 @@ export async function requestMove(
         
         // Detect rate limit errors
         if (errorMessage.includes('429') || errorMessage.includes('rate limit') || 
-            errorMessage.includes('quota exceeded') || errorMessage.includes('Too Many Requests')) {
+            errorMessage.includes('quota exceeded') || errorMessage.includes('Too Many Requests') ||
+            causeMessage.includes('429') || causeMessage.includes('rate limit')) {
           const provider = isGroq ? 'Groq' : isGoogle ? 'Google' : 'Unknown';
           lastError = new RateLimitError(provider);
           throw lastError;

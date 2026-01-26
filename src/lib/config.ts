@@ -2,7 +2,7 @@
  * AI Request Timeouts
  * 
  * Groq: 7s - Fast models, typically respond in 2-3s
- * Gemini: 15s - Slower initial response, but streaming helps
+ * Gemini: 15s - Slower initial response, non-streaming for reliability
  * Gateway: 8s - Other providers via AI SDK
  */
 export const AI_TIMEOUTS = {
@@ -39,10 +39,10 @@ export const ELO_CONFIG = {
  * 
  * GAME_REFRESH_MS: How often to refresh active game
  * LEADERBOARD_REFRESH_MS: How often to refresh leaderboard
- * AUTO_TICK_MS: How often to auto-tick active games
+ * AUTO_TICK_MS: How often to auto-tick active games (must be > typical processing time ~5s)
  */
 export const POLLING_INTERVALS = {
   GAME_REFRESH_MS: 2_000,
   LEADERBOARD_REFRESH_MS: 5_000,
-  AUTO_TICK_MS: 3_000,
+  AUTO_TICK_MS: 8_000, // Increased from 3s to 8s to avoid race conditions with 4-5s processing time
 } as const;

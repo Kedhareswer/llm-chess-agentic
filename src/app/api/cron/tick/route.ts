@@ -21,8 +21,22 @@ async function handleTick(request: Request) {
     .from(games)
     .where(eq(games.status, "active"));
 
-  // Process all games in parallel
-  await Promise.all(activeGames.map(game => processGame(game)));
+  // Process all games in parallel, but catch errors per game so one failure doesn't stop the tick
+  const results = await Promise.allSettled(
+    activeGames.map(game => processGame(game))
+  );
+
+  // Count successful and failed games
+  const successful = results.filter(r => r.status === "fulfilled").length;
+  const failed = results.filter(r => r.status === "rejected").length;
+  
+  if (failed > 0) {
+    console.error(`[tick] ${failed} game(s) failed to process:`, 
+      results
+        .filter(r => r.status === "rejected")
+        .map(r => r.reason)
+    );
+  }
 
   // Increment tick count and update lastTickAt
   await db
@@ -33,6 +47,8 @@ async function handleTick(request: Request) {
   return NextResponse.json({
     success: true,
     gamesProcessed: activeGames.length,
+    gamesSuccessful: successful,
+    gamesFailed: failed,
     tickCount: state.tickCount + 1,
   });
 }
