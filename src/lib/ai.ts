@@ -4,8 +4,9 @@ import { z } from "zod";
 import { APIKeyError, RateLimitError, TimeoutError, ParseError } from "./errors";
 import { AI_TIMEOUTS } from "./config";
 
-// Timeout constants - keep under Vercel Hobby 10s limit
+// Timeout constants - adjusted for each provider's typical response times
 // Non-streaming is simpler and more reliable for short JSON responses
+// Note: Gemini timeout increased to 30s to handle API slowness and cold starts
 
 /**
  * Wraps a promise with a timeout that rejects with a TimeoutError if the
@@ -104,10 +105,13 @@ async function callGroqAPINonStreaming(model: string, prompt: string, apiKey: st
 async function callGeminiNonStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number): Promise<string> {
   const google = createGoogleGenerativeAI({ apiKey });
   
+  // Limit maxTokens to speed up generation and prevent overly long responses
+  // Chess moves are short (e.g., "e4", "Nf3"), so 200 tokens is more than enough
   const textPromise = generateText({
     model: google(model),
     prompt,
     temperature: 0.5,
+    maxTokens: 200, // Limit response size for faster generation
   }).then(result => result.text);
   
   return withTimeout(textPromise, timeoutMs, `Gemini request for ${model}`);
@@ -428,9 +432,11 @@ export async function requestMove(
         }
       }
       
-      // If timeout on first attempt, try once more with shorter prompt
+      // If timeout on first attempt, wait a bit before retrying to avoid hammering the API
       if (attempt === 1 && lastError instanceof TimeoutError) {
-        console.log(`[requestMove] Timeout on attempt 1, will retry...`);
+        console.log(`[requestMove] Timeout on attempt 1, will retry after brief delay...`);
+        // Small delay before retry to avoid hammering slow APIs
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
   }

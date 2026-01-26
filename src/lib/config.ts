@@ -2,12 +2,12 @@
  * AI Request Timeouts
  * 
  * Groq: 7s - Fast models, typically respond in 2-3s
- * Gemini: 15s - Slower initial response, non-streaming for reliability
+ * Gemini: 30s - Slower API with potential cold starts, needs more time for reliable responses
  * Gateway: 8s - Other providers via AI SDK
  */
 export const AI_TIMEOUTS = {
   GROQ_MS: 7_000,
-  GEMINI_MS: 15_000,
+  GEMINI_MS: 30_000, // Increased from 15s to 30s to handle API slowness and cold starts
   GATEWAY_MS: 8_000,
 } as const;
 

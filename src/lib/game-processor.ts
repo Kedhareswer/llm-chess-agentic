@@ -182,6 +182,7 @@ export async function processGame(game: Game): Promise<void> {
   await db.insert(moves).values({
     gameId: currentGame.id,
     modelId,
+    color: color as "white" | "black", // Store which side made this move
     moveNumber,
     moveSan: moveResponse.move,
     fenAfter: result.fen,

@@ -6,6 +6,8 @@ export const StartGameRequestSchema = z.object({
   modelIds: z.array(z.string()).min(2, "At least two models required"),
   groqApiKey: z.string().optional(), // Optional API key for Groq models
   geminiApiKey: z.string().optional(), // Optional API key for Gemini models
+  whiteMode: z.string().optional(), // Optional skill mode for white player
+  blackMode: z.string().optional(), // Optional skill mode for black player
 });
 
 export const SetAPIKeyRequestSchema = z.object({
