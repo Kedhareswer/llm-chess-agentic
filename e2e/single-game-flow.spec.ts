@@ -1,9 +1,6 @@
 import { test, expect } from "@playwright/test";
 import type { Page, Route } from "@playwright/test";
-
-function sanitizeId(id: string) {
-  return id.replace(/[^a-zA-Z0-9_-]/g, "_");
-}
+import { sanitizeId } from "../src/lib/utils";
 
 test(
   "single game flow: select models -> start game -> shows one active game with stats",

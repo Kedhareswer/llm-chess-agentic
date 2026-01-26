@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { GameCard } from "./game-card";
 import type { Game, Model } from "@/db/schema";
+import { formatElapsed } from "@/lib/utils";
+import { useDebouncedCallback } from "@/hooks/use-debounced-callback";
+import { POLLING_INTERVALS } from "@/lib/config";
 
 type GameWithModels = Game & {
   whiteModel?: Model;
@@ -15,24 +18,22 @@ export function GameGrid() {
   const [destroying, setDestroying] = useState(false);
   const [info, setInfo] = useState<string | null>(null);
   const [tickInfo, setTickInfo] = useState<string | null>(null);
-  const [elapsed, setElapsed] = useState<string>("00:00");
   const [isNewGame, setIsNewGame] = useState(false);
   const [recentlyEndedGame, setRecentlyEndedGame] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState("00:00");
   const previousGameIdRef = useRef<string | null>(null);
+  
+  // Error states for game fetching
+  const [gamesError, setGamesError] = useState<string | null>(null);
+  const [previousGamesError, setPreviousGamesError] = useState<string | null>(null);
 
-  function formatElapsed(ms: number) {
-    const totalSec = Math.max(0, Math.floor(ms / 1000));
-    const hours = Math.floor(totalSec / 3600);
-    const mins = Math.floor((totalSec % 3600) / 60);
-    const secs = totalSec % 60;
-    if (hours > 0) return `${hours.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-  }
-
-  async function fetchGames() {
+  const fetchGames = useCallback(async () => {
     try {
+      setGamesError(null); // Clear previous errors
       const res = await fetch("/api/games?status=active");
-      if (!res.ok) return;
+      if (!res.ok) {
+        throw new Error(`Failed to fetch games: ${res.status} ${res.statusText}`);
+      }
       const data = await res.json();
       const first = data.games?.[0];
       if (!first) {
@@ -44,7 +45,6 @@ export function GameGrid() {
           setTimeout(() => setRecentlyEndedGame(null), 3000);
         }
         setGames([]);
-        setElapsed("00:00");
         return;
       }
 
@@ -74,47 +74,30 @@ export function GameGrid() {
       } catch {
         setGames([first]);
       }
-
-      if (first.startedAt) {
-        const started = new Date(first.startedAt).getTime();
-        setElapsed(formatElapsed(Date.now() - started));
-      }
     } catch (err) {
-      // Silently handle network errors to prevent UI crashes
+      const errorMessage = err instanceof Error ? err.message : 'Failed to fetch games';
       console.error('Failed to fetch games:', err);
+      setGamesError(errorMessage);
     }
-  }
+  }, []);
 
-  async function fetchPreviousGames() {
+  const fetchPreviousGames = useCallback(async () => {
     try {
-      const res = await fetch("/api/games?status=complete");
-      if (!res.ok) return;
+      setPreviousGamesError(null); // Clear previous errors
+      const res = await fetch("/api/games/bulk?status=complete&limit=8");
+      if (!res.ok) {
+        throw new Error(`Failed to fetch previous games: ${res.status} ${res.statusText}`);
+      }
       const data = await res.json();
-      const gamesWithModels = await Promise.all(
-        (data.games || []).slice(0, 8).map(async (game: Game) => {
-          try {
-            const detailRes = await fetch(`/api/games/${game.id}`);
-            const detail = await detailRes.json();
-            return {
-              // keep the base list fields even if detail.game is missing
-              ...game,
-              ...(detail?.game || {}),
-              whiteModel: detail.white,
-              blackModel: detail.black,
-            };
-          } catch {
-            return game;
-          }
-        })
-      );
-      setPreviousGames(gamesWithModels);
+      setPreviousGames(data.games);
     } catch (err) {
-      // Silently handle network errors
+      const errorMessage = err instanceof Error ? err.message : 'Failed to fetch previous games';
       console.error('Failed to fetch previous games:', err);
+      setPreviousGamesError(errorMessage);
     }
-  }
+  }, []);
 
-  async function handleTickOnce() {
+  const handleTickOnce = useDebouncedCallback(async () => {
     setTickInfo(null);
     try {
       const res = await fetch("/api/cron/tick");
@@ -129,7 +112,7 @@ export function GameGrid() {
     } catch (e) {
       setTickInfo(`Tick error: ${e instanceof Error ? e.message : String(e)}`);
     }
-  }
+  }, 1000); // 1 second debounce
 
   useEffect(() => {
     fetchGames();
@@ -137,11 +120,11 @@ export function GameGrid() {
     const interval = setInterval(() => {
       fetchGames();
       fetchPreviousGames();
-    }, 2000);
+    }, POLLING_INTERVALS.GAME_REFRESH_MS);
     return () => clearInterval(interval);
   }, []);
 
-  // Automatic tick heartbeat - every 3s check for active games and tick once
+  // Automatic tick heartbeat - use configured interval
   useEffect(() => {
     const tickInterval = setInterval(async () => {
       try {
@@ -153,25 +136,36 @@ export function GameGrid() {
       } catch {
         // Silently ignore tick errors
       }
-    }, 3000);
+    }, POLLING_INTERVALS.AUTO_TICK_MS);
 
     return () => clearInterval(tickInterval);
   }, []);
 
   // Keep elapsed timer in sync with the current game's start time without recreating each second
   const startedAt = games[0]?.startedAt;
+  const gameStatus = games[0]?.status;
+  const endedAt = games[0]?.endedAt;
   useEffect(() => {
     if (!startedAt) {
       setElapsed("00:00");
       return;
     }
     const started = new Date(startedAt).getTime();
-    setElapsed(formatElapsed(Date.now() - started));
-    const timer = setInterval(() => {
-      setElapsed(formatElapsed(Date.now() - started));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [startedAt]);
+    
+    // If game is complete, use endedAt; otherwise use current time
+    const isComplete = gameStatus === "complete" && endedAt;
+    const endTime = isComplete ? new Date(endedAt).getTime() : Date.now();
+    
+    setElapsed(formatElapsed(endTime - started));
+    
+    // Only update timer if game is still active
+    if (!isComplete) {
+      const timer = setInterval(() => {
+        setElapsed(formatElapsed(Date.now() - started));
+      }, 1000);
+      return () => clearInterval(timer);
+    }
+  }, [startedAt, gameStatus, endedAt]);
 
   async function handleDestroy() {
     setDestroying(true);
@@ -193,6 +187,28 @@ export function GameGrid() {
 
   return (
     <div className="w-full max-w-[900px] mx-auto px-2 md:px-0 space-y-6" data-testid="game-grid">
+      {/* Error message for active games */}
+      {gamesError && (
+        <div className="border-2 border-red-500 bg-red-50 p-4" data-testid="games-error">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex-1">
+              <h4 className="font-bold text-red-900 mb-1">Failed to load active games</h4>
+              <p className="text-sm text-red-700">{gamesError}</p>
+            </div>
+            <button
+              onClick={() => {
+                setGamesError(null);
+                fetchGames();
+              }}
+              className="px-3 py-1 text-xs font-bold border-2 border-red-900 bg-white hover:bg-red-100"
+              data-testid="retry-games"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      )}
+
       {hasActiveGame ? (
         <div>
           <div className="flex items-center justify-between mb-2">
@@ -247,16 +263,40 @@ export function GameGrid() {
             ))}
           </div>
         </div>
-      ) : (
+      ) : !gamesError ? (
         <div className="flex h-64 items-center justify-center border-2 border-black bg-white">
           <p className="text-gray-500">No active game. Select exactly two models and start a game.</p>
         </div>
-      )}
+      ) : null}
 
-      {hasPreviousGames && (
+      {(hasPreviousGames || previousGamesError) && (
         <div>
           <h3 className="text-sm font-bold mb-2">PREVIOUS GAMES</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 max-h-[800px] overflow-y-auto border-2 border-black bg-gray-50 p-4">
+          
+          {/* Error message for previous games */}
+          {previousGamesError && (
+            <div className="border-2 border-red-500 bg-red-50 p-4 mb-4" data-testid="previous-games-error">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex-1">
+                  <h4 className="font-bold text-red-900 mb-1">Failed to load previous games</h4>
+                  <p className="text-sm text-red-700">{previousGamesError}</p>
+                </div>
+                <button
+                  onClick={() => {
+                    setPreviousGamesError(null);
+                    fetchPreviousGames();
+                  }}
+                  className="px-3 py-1 text-xs font-bold border-2 border-red-900 bg-white hover:bg-red-100"
+                  data-testid="retry-previous-games"
+                >
+                  Retry
+                </button>
+              </div>
+            </div>
+          )}
+          
+          {hasPreviousGames && (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 max-h-[800px] overflow-y-auto border-2 border-black bg-gray-50 p-4">
             {previousGames.map((game) => {
               const isRecentlyEnded = game.id === recentlyEndedGame;
               const victoryClass = isRecentlyEnded
@@ -280,29 +320,41 @@ export function GameGrid() {
                     }}
                   />
                   {game.result && (
-                    <div className="border-2 border-t-0 border-black p-2 bg-gray-50">
-                      <div className="flex flex-col gap-1">
-                        {game.result === "1-0" && (
-                          <span className={`text-xs font-bold text-green-700 flex items-center gap-1 ${isRecentlyEnded ? "animate-victory-white" : ""}`}>
-                            <span className="inline-block">🏆</span> White wins
+                    <div className="border-2 border-t-0 border-black p-3 bg-gradient-to-br from-gray-50 to-gray-100">
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center justify-between">
+                          {game.result === "1-0" && (
+                            <span className={`text-sm font-bold text-green-700 flex items-center gap-1 ${isRecentlyEnded ? "animate-victory-white" : ""}`}>
+                              <span className="inline-block text-base">🏆</span> 
+                              <span>{game.whiteModel?.name || "White"} wins</span>
+                            </span>
+                          )}
+                          {game.result === "0-1" && (
+                            <span className={`text-sm font-bold text-red-700 flex items-center gap-1 ${isRecentlyEnded ? "animate-victory-black" : ""}`}>
+                              <span className="inline-block text-base">🏆</span> 
+                              <span>{game.blackModel?.name || "Black"} wins</span>
+                            </span>
+                          )}
+                          {game.result === "1/2-1/2" && (
+                            <span className={`text-sm font-bold text-gray-700 flex items-center gap-1 ${isRecentlyEnded ? "animate-draw" : ""}`}>
+                              <span className="inline-block text-base">🤝</span> Draw
+                            </span>
+                          )}
+                          <span className="text-xs font-mono font-semibold text-gray-700 bg-white px-2 py-1 border border-gray-300">
+                            {game.result}
                           </span>
-                        )}
-                        {game.result === "0-1" && (
-                          <span className={`text-xs font-bold text-red-700 flex items-center gap-1 ${isRecentlyEnded ? "animate-victory-black" : ""}`}>
-                            <span className="inline-block">🏆</span> Black wins
-                          </span>
-                        )}
-                        {game.result === "1/2-1/2" && (
-                          <span className={`text-xs font-bold text-gray-700 flex items-center gap-1 ${isRecentlyEnded ? "animate-draw" : ""}`}>
-                            <span className="inline-block">🤝</span> Draw
-                          </span>
-                        )}
+                        </div>
                         {game.resultReason && (
-                          <p className="text-[10px] text-gray-600 leading-tight">{game.resultReason}</p>
+                          <div className="bg-white border border-gray-300 p-2 rounded">
+                            <p className="text-xs font-semibold text-gray-700 mb-1">Reason:</p>
+                            <p className="text-xs text-gray-800 leading-relaxed">{game.resultReason}</p>
+                          </div>
                         )}
-                        <span className="text-[10px] text-gray-500">
-                          {game.endedAt && new Date(game.endedAt).toLocaleString()}
-                        </span>
+                        {game.endedAt && (
+                          <div className="text-[10px] text-gray-500 border-t border-gray-300 pt-2">
+                            Finished: {new Date(game.endedAt).toLocaleString()}
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
@@ -310,6 +362,7 @@ export function GameGrid() {
               );
             })}
           </div>
+          )}
         </div>
       )}
     </div>

@@ -1,16 +1,24 @@
-import { streamText, createGateway } from "ai";
+import { streamText, generateText, createGateway } from "ai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { z } from "zod";
+import { APIKeyError, RateLimitError, TimeoutError, ParseError } from "./errors";
+import { AI_TIMEOUTS } from "./config";
 
 // Timeout constants - keep under Vercel Hobby 10s limit
-// Gemini needs more time for initial response, but streaming helps
-const GROQ_TIMEOUT_MS = 7_000;
-const GEMINI_TIMEOUT_MS = 15_000;
-const GATEWAY_TIMEOUT_MS = 8_000;
+// Non-streaming is simpler and more reliable for short JSON responses
 
+/**
+ * Wraps a promise with a timeout that rejects with a TimeoutError if the
+ * operation takes longer than the specified time.
+ * 
+ * @param promise - The promise to wrap with timeout
+ * @param timeoutMs - The timeout duration in milliseconds
+ * @param label - A descriptive label for the operation
+ * @returns A promise that resolves with the original result or rejects with TimeoutError
+ */
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+    const timer = setTimeout(() => reject(new TimeoutError(label, timeoutMs)), timeoutMs);
     promise
       .then((v) => {
         clearTimeout(timer);
@@ -23,8 +31,17 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
   });
 }
 
-// Streaming Groq API call - collects chunks until complete or valid JSON found
-async function callGroqAPIStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number): Promise<string> {
+/**
+ * Makes a non-streaming API call to Groq with the provided parameters.
+ * Uses standard OpenAI-compatible API with stream: false for simpler, more reliable responses.
+ * 
+ * @param model - The Groq model identifier
+ * @param prompt - The prompt to send to the model
+ * @param apiKey - The API key for Groq
+ * @param timeoutMs - The timeout in milliseconds
+ * @returns The complete response text from the model
+ */
+async function callGroqAPINonStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number): Promise<string> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   
@@ -39,87 +56,67 @@ async function callGroqAPIStreaming(model: string, prompt: string, apiKey: strin
         model,
         messages: [{ role: "user", content: prompt }],
         temperature: 0.5, // Lower temperature for more consistent JSON
-        stream: true,
+        stream: false, // Non-streaming for simpler handling
       }),
       signal: controller.signal,
     });
 
     if (!response.ok) {
       const error = await response.text();
+      
+      // Detect API key errors (401, 403)
+      if (response.status === 401 || response.status === 403) {
+        throw new APIKeyError('Groq', response.status);
+      }
+      
+      // Detect rate limit errors (429)
+      if (response.status === 429) {
+        const retryAfter = response.headers.get('retry-after');
+        throw new RateLimitError('Groq', retryAfter ? parseInt(retryAfter, 10) : undefined);
+      }
+      
       throw new Error(`Groq API error ${response.status}: ${error}`);
     }
 
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error("No response body");
-
-    const decoder = new TextDecoder();
-    let fullText = "";
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || "";
     
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split("\n").filter(line => line.startsWith("data: "));
-      
-      for (const line of lines) {
-        const data = line.slice(6); // Remove "data: " prefix
-        if (data === "[DONE]") continue;
-        
-        try {
-          const parsed = JSON.parse(data);
-          const content = parsed.choices?.[0]?.delta?.content || "";
-          fullText += content;
-          
-          // Early exit: if we have valid JSON, stop streaming
-          const earlyParse = parseAIResponse(fullText);
-          if (earlyParse) {
-            reader.cancel();
-            return fullText;
-          }
-        } catch {
-          // Ignore JSON parse errors for SSE chunks
-        }
-      }
+    if (!content) {
+      throw new Error("Groq API returned empty response");
     }
     
-    return fullText;
+    return content;
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
-// Streaming Gemini API call using AI SDK
-async function callGeminiStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number): Promise<string> {
+/**
+ * Makes a non-streaming API call to Google Gemini with the provided parameters.
+ * Uses generateText for simpler, more reliable responses (no streaming complexity).
+ * 
+ * @param model - The Gemini model identifier
+ * @param prompt - The prompt to send to the model
+ * @param apiKey - The API key for Gemini
+ * @param timeoutMs - The timeout in milliseconds
+ * @returns The complete response text from the model
+ */
+async function callGeminiNonStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number): Promise<string> {
   const google = createGoogleGenerativeAI({ apiKey });
   
-  const streamPromise = (async () => {
-    const result = streamText({
-      model: google(model),
-      prompt,
-      temperature: 0.5,
-    });
-    
-    let fullText = "";
-    for await (const chunk of (await result).textStream) {
-      fullText += chunk;
-      
-      // Early exit: if we have valid JSON, stop streaming
-      const earlyParse = parseAIResponse(fullText);
-      if (earlyParse) {
-        return fullText;
-      }
-    }
-    return fullText;
-  })();
+  const textPromise = generateText({
+    model: google(model),
+    prompt,
+    temperature: 0.5,
+  }).then(result => result.text);
   
-  return withTimeout(streamPromise, timeoutMs, `Gemini streaming for ${model}`);
+  return withTimeout(textPromise, timeoutMs, `Gemini request for ${model}`);
 }
 
 // AI Gateway handles routing to all providers (OpenAI, Anthropic, Google, etc.)
 // Uses OIDC authentication automatically when deployed to Vercel
 const gateway = createGateway({
-  apiKey: process.env.AI_GATEWAY_API_KEY, // Optional - falls back to OIDC on Vercel
+  apiKey: process.env.AI_GATEWAY_API_KEY, // Optional - falls back to OIDC on Verceprocess.env.AI_GATEWAY_API_KEY, // Optional - falls back to OIDC on Vercel
 });
 
 const MoveResponseSchema = z.object({
@@ -133,6 +130,9 @@ const MoveResponseSchema = z.object({
 
 type MoveResponse = z.infer<typeof MoveResponseSchema>;
 
+/**
+ * Parameters for building chess prompts for AI models
+ */
 interface PromptParams {
   fen: string;
   color: "white" | "black";
@@ -141,6 +141,12 @@ interface PromptParams {
   errorContext?: string;
 }
 
+/**
+ * Builds a prompt for an AI model to make a chess move based on the current game state.
+ * 
+ * @param params - The parameters for building the prompt
+ * @returns A formatted string prompt for the AI model
+ */
 export function buildPrompt(params: PromptParams): string {
   const { fen, color, legalMoves, lastMoves, errorContext } = params;
 
@@ -168,73 +174,44 @@ Do NOT add any text before or after the JSON.`;
   return prompt;
 }
 
+/**
+ * Parses an AI response to extract the move and reasoning.
+ * Uses multiple strategies to handle different response formats.
+ * 
+ * @param response - The raw response string from the AI
+ * @returns An object containing the move and reasoning, or null if parsing fails
+ */
 export function parseAIResponse(response: string): MoveResponse | null {
   if (!response || response.trim().length === 0) return null;
   
-  // Multiple extraction strategies for robust JSON parsing
+  // Three strategies for robust JSON parsing
   const strategies = [
-    // Strategy 1: Direct JSON match
+    // Strategy 1: Direct JSON extraction
     () => {
       const match = response.match(/\{[\s\S]*?\}/);
       return match ? match[0] : null;
     },
-    // Strategy 2: Extract from markdown code block
+    
+    // Strategy 2: Markdown code block extraction
     () => {
       const codeBlockMatch = response.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
       return codeBlockMatch ? codeBlockMatch[1] : null;
     },
-    // Strategy 3: Find JSON between curly braces more aggressively
+    
+    // Strategy 3: Natural language extraction
     () => {
-      const start = response.indexOf("{");
-      const end = response.lastIndexOf("}");
-      if (start !== -1 && end > start) {
-        return response.slice(start, end + 1);
-      }
-      return null;
-    },
-    // Strategy 4: Try to fix common JSON issues
-    () => {
-      let jsonStr = response;
-      // Remove markdown formatting
-      jsonStr = jsonStr.replace(/```json\s*/g, "").replace(/```\s*/g, "");
-      // Extract potential JSON
-      const match = jsonStr.match(/\{[\s\S]*\}/);
-      if (!match) return null;
-      
-      let candidate = match[0];
-      // Fix common issues: single quotes to double quotes
-      candidate = candidate.replace(/'/g, '"');
-      // Fix unquoted keys
-      candidate = candidate.replace(/(\{|,)\s*(\w+)\s*:/g, '$1"$2":');
-      // Remove trailing commas
-      candidate = candidate.replace(/,\s*}/g, "}");
-      return candidate;
-    },
-    // Strategy 5: Extract move and reasoning from natural language as last resort
-    () => {
-      // Look for patterns like "move": "e4" or move: e4 or I play e4
       const movePatterns = [
-        /"move"\s*:\s*"([a-h][1-8][a-h][1-8][qrbn]?|[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8][+#]?|O-O(?:-O)?|0-0(?:-0)?)"/i,
-        /\bmove[:\s]+([a-h][1-8][a-h][1-8][qrbn]?|[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8]|O-O(?:-O)?|0-0(?:-0)?)\b/i,
+        /"move"\s*:\s*"([^"]+)"/i,
+        /\bwill\s+play\s+([a-h][1-8][a-h][1-8][qrbn]?|[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8][+#]?|O-O(?:-O)?|0-0(?:-0)?)\b/i,
         /\bplay(?:ing)?\s+([a-h][1-8][a-h][1-8][qrbn]?|[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8]|O-O(?:-O)?|0-0(?:-0)?)\b/i,
-        /\bchoose\s+([a-h][1-8][a-h][1-8][qrbn]?|[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8]|O-O(?:-O)?|0-0(?:-0)?)\b/i,
+        /\bmove[:\s]+([a-h][1-8][a-h][1-8][qrbn]?|[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8]|O-O(?:-O)?|0-0(?:-0)?)\b/i,
       ];
       
       for (const pattern of movePatterns) {
         const match = response.match(pattern);
         if (match && match[1]) {
-          // Try to extract reasoning from the response
-          const reasoningMatch = response.match(/"reasoning"\s*:\s*"([^"]+)"|"reason"\s*:\s*"([^"]+)"/i);
-
-          let reasoning: string;
-          if (reasoningMatch) {
-            reasoning = reasoningMatch[1] || reasoningMatch[2] || "No reasoning provided";
-          } else {
-            // As a fallback, keep the full natural-language response as the reasoning
-            // so the UI shows the actual explanation the model gave, not a placeholder.
-            reasoning = response.trim();
-          }
-
+          const reasoningMatch = response.match(/"reasoning"\s*:\s*"([^"]+)"/i);
+          const reasoning = reasoningMatch ? reasoningMatch[1] : response.trim();
           return JSON.stringify({ move: match[1], reasoning });
         }
       }
@@ -251,7 +228,6 @@ export function parseAIResponse(response: string): MoveResponse | null {
       const validated = MoveResponseSchema.safeParse(parsed);
       
       if (validated.success) {
-        console.log(`[parseAIResponse] Successfully parsed with strategy`);
         return validated.data;
       }
     } catch {
@@ -259,10 +235,16 @@ export function parseAIResponse(response: string): MoveResponse | null {
     }
   }
   
-  console.warn(`[parseAIResponse] All strategies failed for response: ${response.slice(0, 200)}...`);
   return null;
 }
 
+/**
+ * Attempts to map an invalid move to a legal move when the AI returns an illegal move.
+ * 
+ * @param invalidMove - The invalid move returned by the AI
+ * @param legalMoves - The list of legal moves in the current position
+ * @returns A legal move string or null if no mapping could be found
+ */
 // Intelligently map invalid moves to legal moves (e.g., "5" -> "e5", "4" -> "e4")
 function mapInvalidMoveToLegal(invalidMove: string, legalMoves: string[]): string | null {
   // If it's just a number, try common pawn moves
@@ -290,7 +272,12 @@ function mapInvalidMoveToLegal(invalidMove: string, legalMoves: string[]): strin
   return null;
 }
 
-// Pick a random legal move as fallback when AI fails
+/**
+ * Picks a random legal move as a fallback when the AI fails to provide a valid response.
+ * 
+ * @param legalMoves - The list of legal moves in the current position
+ * @returns An object containing a random legal move and a fallback reasoning
+ */
 export function pickRandomMove(legalMoves: string[]): MoveResponse {
   if (legalMoves.length === 0) {
     throw new Error("No legal moves available");
@@ -302,6 +289,16 @@ export function pickRandomMove(legalMoves: string[]): MoveResponse {
   };
 }
 
+/**
+ * Requests a move from an AI model based on the current game state.
+ * Handles different providers (Groq, Google, others) and includes retry logic.
+ * 
+ * @param modelId - The ID of the model to request a move from
+ * @param params - The parameters for building the prompt
+ * @param retries - Number of retry attempts (default: 2)
+ * @param options - Optional API key overrides
+ * @returns A promise that resolves to the AI's move and reasoning
+ */
 export async function requestMove(
   modelId: string,
   params: PromptParams,
@@ -324,20 +321,28 @@ export async function requestMove(
     `[requestMove] Model: ${modelId}, isGroq: ${isGroq}, isGoogle: ${isGoogle}, groqKey: ${!!groqApiKey}, geminiKey: ${!!geminiApiKey}`
   );
 
+  // Check for missing API keys BEFORE attempting requests
+  if (isGroq && !groqApiKey) {
+    throw new APIKeyError('Groq');
+  }
+  if (isGoogle && !geminiApiKey) {
+    throw new APIKeyError('Google');
+  }
+
   let lastError: Error | null = null;
   
-  // Try up to 2 attempts with streaming
+  // Try up to 2 attempts with non-streaming API calls
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       console.log(`[requestMove] Attempt ${attempt}/${retries} for ${modelId}`);
       let text: string;
       
       if (isGroq && groqApiKey) {
-        // Use streaming Groq API
-        text = await callGroqAPIStreaming(groqModel!, prompt, groqApiKey, GROQ_TIMEOUT_MS);
+        // Use non-streaming Groq API (simpler and more reliable)
+        text = await callGroqAPINonStreaming(groqModel!, prompt, groqApiKey, AI_TIMEOUTS.GROQ_MS);
       } else if (isGoogle && geminiApiKey) {
-        // Use streaming Gemini API
-        text = await callGeminiStreaming(googleModel!, prompt, geminiApiKey, GEMINI_TIMEOUT_MS);
+        // Use non-streaming Gemini API (more reliable for short JSON responses)
+        text = await callGeminiNonStreaming(googleModel!, prompt, geminiApiKey, AI_TIMEOUTS.GEMINI_MS);
       } else {
         // Use AI Gateway for other providers (non-streaming fallback)
         const streamPromise = (async () => {
@@ -354,7 +359,7 @@ export async function requestMove(
           }
           return fullText;
         })();
-        text = await withTimeout(streamPromise, GATEWAY_TIMEOUT_MS, `Gateway request for ${modelId}`);
+        text = await withTimeout(streamPromise, AI_TIMEOUTS.GATEWAY_MS, `Gateway request for ${modelId}`);
       }
 
       console.log(`[requestMove] Got response (${text.length} chars): ${text.slice(0, 100)}...`);
@@ -367,15 +372,64 @@ export async function requestMove(
         return parsed;
       } else {
         console.warn(`[requestMove] Failed to parse response, retrying...`);
-        lastError = new Error("Failed to parse AI response");
+        lastError = new ParseError(text);
       }
 
     } catch (error) {
       console.error(`[requestMove] Attempt ${attempt} error:`, error);
-      lastError = error instanceof Error ? error : new Error(String(error));
+      
+      // Detect and throw typed errors
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorCause = (error as any)?.cause;
+      const causeMessage = errorCause instanceof Error ? errorCause.message : String(errorCause || '');
+      
+      // Check if it's already a typed error - just pass it through
+      if (error instanceof APIKeyError || error instanceof RateLimitError || 
+          error instanceof TimeoutError || error instanceof ParseError) {
+        lastError = error;
+        // For fatal errors (API key, rate limit), throw immediately
+        if (error instanceof APIKeyError || error instanceof RateLimitError) {
+          throw error;
+        }
+      } else {
+        // Check for Gateway authentication errors (common when API keys are missing)
+        if (errorMessage.includes('Gateway') && (errorMessage.includes('authentication') || errorMessage.includes('401') || 
+            causeMessage.includes('authentication') || causeMessage.includes('401'))) {
+          const provider = isGroq ? 'Groq' : isGoogle ? 'Google' : 'Unknown';
+          lastError = new APIKeyError(provider, 401);
+          throw lastError;
+        }
+        
+        // Detect API key errors from error messages
+        if (errorMessage.includes('401') || errorMessage.includes('403') || 
+            errorMessage.includes('Unauthorized') || errorMessage.includes('API key') ||
+            errorMessage.includes('Invalid API') || causeMessage.includes('401') || 
+            causeMessage.includes('403') || causeMessage.includes('Unauthorized')) {
+          const provider = isGroq ? 'Groq' : isGoogle ? 'Google' : 'Unknown';
+          lastError = new APIKeyError(provider);
+          throw lastError;
+        }
+        
+        // Detect rate limit errors
+        if (errorMessage.includes('429') || errorMessage.includes('rate limit') || 
+            errorMessage.includes('quota exceeded') || errorMessage.includes('Too Many Requests') ||
+            causeMessage.includes('429') || causeMessage.includes('rate limit')) {
+          const provider = isGroq ? 'Groq' : isGoogle ? 'Google' : 'Unknown';
+          lastError = new RateLimitError(provider);
+          throw lastError;
+        }
+        
+        // Detect timeout errors
+        if (errorMessage.includes('timed out') || errorMessage.includes('timeout')) {
+          const timeoutMs = isGroq ? AI_TIMEOUTS.GROQ_MS : isGoogle ? AI_TIMEOUTS.GEMINI_MS : AI_TIMEOUTS.GATEWAY_MS;
+          lastError = new TimeoutError(`AI request for ${modelId}`, timeoutMs);
+        } else {
+          lastError = error instanceof Error ? error : new Error(String(error));
+        }
+      }
       
       // If timeout on first attempt, try once more with shorter prompt
-      if (attempt === 1 && lastError.message.includes("timed out")) {
+      if (attempt === 1 && lastError instanceof TimeoutError) {
         console.log(`[requestMove] Timeout on attempt 1, will retry...`);
       }
     }

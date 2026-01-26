@@ -1,66 +1,94 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { games, models, tournament } from "@/db/schema";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { processGame } from "@/lib/game-processor";
 import { randomUUID } from "crypto";
+import { StartGameRequestSchema } from "@/types/api";
 
 export async function POST(request: Request) {
-  const body = await request.json().catch(() => ({}));
-  const modelIds: string[] = Array.isArray(body.modelIds) ? body.modelIds : [];
-
+  // Validate request body
+  const body = await request.json().catch(() => null);
+  const validation = StartGameRequestSchema.safeParse(body);
+  
+  if (!validation.success) {
+    return NextResponse.json(
+      { error: validation.error.issues[0].message },
+      { status: 400 }
+    );
+  }
+  
+  const { modelIds, groqApiKey, geminiApiKey } = validation.data;
   const uniqueIds = Array.from(new Set(modelIds)).filter(Boolean);
   if (uniqueIds.length < 2) {
     return NextResponse.json({ error: "Select at least two models" }, { status: 400 });
   }
 
-  // ensure models exist and are active
-  const activeModels = await db
-    .select()
-    .from(models)
-    .where(and(inArray(models.id, uniqueIds), eq(models.active, true)));
+  // Use transaction to prevent race condition
+  try {
+    const result = await db.transaction(async (tx) => {
+      // Use advisory lock to prevent concurrent game creation
+      // This ensures only one transaction can create a game at a time
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(12345)`);
+      
+      // Check for active game after acquiring lock
+      const [activeGame] = await tx
+        .select()
+        .from(games)
+        .where(eq(games.status, "active"));
 
-  if (activeModels.length < 2) {
-    return NextResponse.json({ error: "Selected models must exist and be active" }, { status: 400 });
-  }
+      if (activeGame) {
+        throw new Error("A game is already running");
+      }
 
-  // only one active game allowed
-  const [activeGame] = await db.select().from(games).where(eq(games.status, "active"));
-  if (activeGame) {
-    return NextResponse.json({ error: "A game is already running" }, { status: 400 });
-  }
+      // Ensure models exist and are active
+      const activeModels = await tx
+        .select()
+        .from(models)
+        .where(and(inArray(models.id, uniqueIds), eq(models.active, true)));
 
-  // pick first two selected active models
-  const [m1, m2] = activeModels;
-  const white = Math.random() < 0.5 ? m1 : m2;
-  const black = white.id === m1.id ? m2 : m1;
+      if (activeModels.length < 2) {
+        throw new Error("Selected models must exist and be active");
+      }
 
-  const gameId = randomUUID();
-  await db
-    .insert(games)
-    .values({
-      id: gameId,
-      whiteId: white.id,
-      blackId: black.id,
-      status: "active",
-      startedAt: new Date(),
+      // Pick first two selected active models
+      const [m1, m2] = activeModels;
+      const white = Math.random() < 0.5 ? m1 : m2;
+      const black = white.id === m1.id ? m2 : m1;
+
+      const gameId = randomUUID();
+      await tx.insert(games).values({
+        id: gameId,
+        whiteId: white.id,
+        blackId: black.id,
+        status: "active",
+        startedAt: new Date(),
+        groqApiKey: groqApiKey?.trim() || null,
+        geminiApiKey: geminiApiKey?.trim() || null,
+      });
+
+      return { gameId, white: white.id, black: black.id };
     });
 
-  // Kick off first move immediately so white starts
-  const [createdGame] = await db.select().from(games).where(eq(games.id, gameId));
-  if (createdGame) {
-    try {
-      await processGame(createdGame);
-    } catch (e) {
-      console.error("processGame after start failed", e);
+    // Kick off first move outside transaction to avoid holding locks
+    const [createdGame] = await db.select().from(games).where(eq(games.id, result.gameId));
+    if (createdGame) {
+      try {
+        await processGame(createdGame);
+      } catch (e) {
+        console.error("processGame after start failed", e);
+      }
     }
+
+    // Ensure tournament running
+    await db
+      .update(tournament)
+      .set({ status: "running", startedAt: new Date() })
+      .where(eq(tournament.id, 1));
+
+    return NextResponse.json({ success: true, ...result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to start game";
+    return NextResponse.json({ error: message }, { status: 400 });
   }
-
-  // ensure tournament running
-  await db
-    .update(tournament)
-    .set({ status: "running", startedAt: new Date() })
-    .where(eq(tournament.id, 1));
-
-  return NextResponse.json({ success: true, gameId, white: white.id, black: black.id });
 }
