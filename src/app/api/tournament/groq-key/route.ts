@@ -16,7 +16,7 @@ export async function POST(request: Request) {
   
   const { key } = validation.data;
 
-  setGroqApiKey(key);
+  await setGroqApiKey(key);
 
   return NextResponse.json({ success: true });
 }

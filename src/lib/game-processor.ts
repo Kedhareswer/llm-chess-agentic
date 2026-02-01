@@ -1,7 +1,7 @@
 import { db } from "@/db";
 import { games, moves, models, tournament } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { validateMove, applyMove, getLegalMoves, getTurn, isGameOver, getGameResult, getMoveNumber } from "./chess";
+import { validateMove, applyMove, getLegalMoves, getTurn, isGameOver, getGameResult, getGameEndReason, getMoveNumber } from "./chess";
 import { requestMove } from "./ai";
 import { calculateNewElo, outcomeFromResult } from "./elo";
 import { GAME_RULES } from "./config";
@@ -45,8 +45,8 @@ export async function processGame(game: Game): Promise<void> {
   }
 
   // Use game-specific API keys if available, otherwise fall back to global keys
-  const groqApiKey = currentGame.groqApiKey || getGroqApiKey();
-  const geminiApiKey = currentGame.geminiApiKey || getGeminiApiKey();
+  const groqApiKey = currentGame.groqApiKey || (await getGroqApiKey());
+  const geminiApiKey = currentGame.geminiApiKey || (await getGeminiApiKey());
   console.log(`[processGame] Game ${currentGame.id}, groqApiKey present: ${!!groqApiKey}, geminiKey present: ${!!geminiApiKey}`);
 
   const turn = getTurn(currentGame.fen);
@@ -182,6 +182,7 @@ export async function processGame(game: Game): Promise<void> {
   await db.insert(moves).values({
     gameId: currentGame.id,
     modelId,
+    color: color as "white" | "black", // Store which side made this move
     moveNumber,
     moveSan: moveResponse.move,
     fenAfter: result.fen,
@@ -194,10 +195,11 @@ export async function processGame(game: Game): Promise<void> {
     .set({ fen: result.fen, pgn: result.pgn })
     .where(eq(games.id, currentGame.id));
 
-  // Check for game end
-  if (isGameOver(result.fen)) {
-    const gameResult = getGameResult(result.fen);
-    const reason = gameResult === "1/2-1/2" ? "Draw by stalemate or insufficient material" : "Checkmate";
+  // Check for game end (use PGN for proper repetition detection)
+  if (isGameOver(result.fen, result.pgn)) {
+    const gameResult = getGameResult(result.fen, result.pgn);
+    const reason = getGameEndReason(result.fen, result.pgn) || 
+                   (gameResult === "1/2-1/2" ? "Draw" : "Checkmate");
     await endGame(currentGame, gameResult!, reason);
   }
   } catch (error) {

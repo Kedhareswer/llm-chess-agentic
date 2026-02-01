@@ -4,6 +4,7 @@ import { STARTING_FEN } from "@/lib/chess";
 export const tournamentStatusEnum = pgEnum("tournament_status", ["stopped", "running"]);
 export const gameStatusEnum = pgEnum("game_status", ["active", "complete"]);
 export const gameResultEnum = pgEnum("game_result", ["1-0", "0-1", "1/2-1/2"]);
+export const colorEnum = pgEnum("color", ["white", "black"]);
 
 export const models = pgTable("models", {
   id: text("id").primaryKey(),
@@ -38,6 +39,7 @@ export const moves = pgTable("moves", {
   id: uuid("id").primaryKey().defaultRandom(),
   gameId: uuid("game_id").notNull().references(() => games.id),
   modelId: text("model_id").notNull().references(() => models.id),
+  color: colorEnum("color").notNull(), // Which side made this move: white or black
   moveNumber: integer("move_number").notNull(),
   moveSan: text("move_san").notNull(),
   fenAfter: text("fen_after").notNull(),
@@ -52,6 +54,8 @@ export const tournament = pgTable("tournament", {
   tickIntervalSec: integer("tick_interval_sec").notNull().default(60),
   lastTickAt: timestamp("last_tick_at"),
   startedAt: timestamp("started_at"),
+  groqApiKey: text("groq_api_key"), // Global API key for Groq models
+  geminiApiKey: text("gemini_api_key"), // Global API key for Gemini models
 });
 
 export type Model = typeof models.$inferSelect;

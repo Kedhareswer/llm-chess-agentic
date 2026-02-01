@@ -21,7 +21,7 @@ export function GameCard({ game }: GameCardProps) {
   return (
     <Link
       href={`/game/${game.id}`}
-      className="border-2 border-black bg-white p-2 hover:bg-gray-50 transition-colors block w-full max-w-[780px] mx-auto"
+      className="border border-gray-200 bg-white p-3 hover:shadow-md transition-all block w-full max-w-[780px] mx-auto rounded-lg"
       data-testid="game-card"
     >
       {/* Black player - top */}
@@ -50,6 +50,7 @@ export function GameCard({ game }: GameCardProps) {
               position: game.fen,
               allowDragging: false,
               boardStyle: { borderRadius: "0" },
+              animationDurationInMs: 300,
             }}
           />
         </div>

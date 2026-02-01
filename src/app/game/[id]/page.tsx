@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { Chessboard } from "react-chessboard";
 import { ReasoningPanel } from "@/components/reasoning-panel";
@@ -9,7 +9,8 @@ import type { Game, Move, Model } from "@/db/schema";
 import { formatElapsed } from "@/lib/utils";
 import { useDebouncedCallback } from "@/hooks/use-debounced-callback";
 import { useGameData } from "@/hooks/use-game-data";
-import { POLLING_INTERVALS } from "@/lib/config";
+import { useChessSounds } from "@/hooks/use-chess-sounds";
+import { Chess } from "chess.js";
 
 interface GameData {
   game: Game;
@@ -24,10 +25,84 @@ export default function GamePage() {
   const [elapsed, setElapsed] = useState("00:00");
   const [selectedMoveId, setSelectedMoveId] = useState<string | null>(null);
   const [viewPosition, setViewPosition] = useState<string | null>(null);
+  const [previousFen, setPreviousFen] = useState<string | null>(null);
+  const [previousMoveCount, setPreviousMoveCount] = useState<number>(0);
+  const [isAnimating, setIsAnimating] = useState(false);
 
   const gameId = params.id as string;
   
-  const { data, loading, error, refetch } = useGameData(gameId, POLLING_INTERVALS.GAME_REFRESH_MS);
+  const { data, loading, error, refetch } = useGameData(gameId);
+  const { sounds } = useChessSounds();
+
+  // Track FEN changes to trigger animations and sounds
+  useEffect(() => {
+    const currentFen = data?.game?.fen;
+    const currentMoveCount = data?.moves?.length || 0;
+    
+    // Only play sounds when:
+    // 1. We're viewing the current position (not historical)
+    // 2. A new move was actually added (move count increased)
+    // 3. FEN changed
+    const isNewMove = currentMoveCount > previousMoveCount;
+    const isCurrentPosition = !viewPosition;
+    const fenChanged = currentFen && previousFen && currentFen !== previousFen;
+    
+    if (fenChanged && isCurrentPosition) {
+      setIsAnimating(true);
+      const timer = setTimeout(() => setIsAnimating(false), 350);
+      
+      // Only play sound if a new move was actually applied
+      if (isNewMove && sounds) {
+        try {
+          const chess = new Chess(previousFen);
+          const latestMove = data.moves[data.moves.length - 1];
+          
+          if (latestMove) {
+            const moveSan = latestMove.moveSan;
+            const chessAfter = new Chess(currentFen);
+            
+            // Check for checkmate first
+            if (chessAfter.isCheckmate()) {
+              sounds.playCheckmate();
+            }
+            // Check for check
+            else if (chessAfter.isCheck()) {
+              sounds.playCheck();
+            }
+            // Check for capture (contains 'x' in SAN)
+            else if (moveSan.includes('x')) {
+              sounds.playCapture();
+            }
+            // Check for castling
+            else if (moveSan === 'O-O' || moveSan === 'O-O-O') {
+              sounds.playCastle();
+            }
+            // Check for promotion (contains '=')
+            else if (moveSan.includes('=')) {
+              sounds.playPromotion();
+            }
+            // Regular move
+            else {
+              sounds.playMove();
+            }
+          }
+        } catch (error) {
+          // Fallback to regular move sound if analysis fails
+          sounds.playMove();
+        }
+      }
+      
+      return () => clearTimeout(timer);
+    }
+    
+    // Update previous state
+    if (currentFen) {
+      setPreviousFen(currentFen);
+    }
+    if (currentMoveCount !== undefined) {
+      setPreviousMoveCount(currentMoveCount);
+    }
+  }, [data?.game?.fen, data?.moves?.length, previousFen, previousMoveCount, viewPosition, sounds]);
   
   useEffect(() => {
     if (data?.game?.startedAt) {
@@ -228,13 +303,13 @@ export default function GamePage() {
             <div className="h-[calc(100vh-200px)]">
               <EvalBar fen={boardPosition} />
             </div>
-            <div className="w-full max-w-[calc(100vh-200px)] aspect-square">
+            <div className={`w-full max-w-[calc(100vh-200px)] aspect-square ${isAnimating ? 'chessboard-animating' : ''}`}>
               <Chessboard
-                key={boardPosition}
                 options={{
                   id: data.game.id,
                   position: boardPosition,
                   allowDragging: false,
+                  animationDurationInMs: 300,
                 }}
               />
             </div>

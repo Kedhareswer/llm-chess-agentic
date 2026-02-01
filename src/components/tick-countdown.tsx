@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { usePageVisibility } from "@/hooks/use-page-visibility";
+import { POLLING_INTERVALS } from "@/lib/config";
 
 function formatElapsed(ms: number): string {
   const totalSec = Math.max(0, Math.floor(ms / 1000));
@@ -10,11 +12,16 @@ function formatElapsed(ms: number): string {
 }
 
 export function TickCountdown() {
+  const visible = usePageVisibility();
   const [elapsed, setElapsed] = useState("0:00");
   const [tickCount, setTickCount] = useState(0);
   const [gameStartedAt, setGameStartedAt] = useState<string | null>(null);
 
-  // Fetch active game
+  const pollMs = visible
+    ? POLLING_INTERVALS.GAME_REFRESH_MS
+    : POLLING_INTERVALS.WHEN_TAB_HIDDEN_MS;
+
+  // Fetch active game and tick count
   useEffect(() => {
     async function fetchGame() {
       try {
@@ -32,13 +39,6 @@ export function TickCountdown() {
       }
     }
 
-    fetchGame();
-    const interval = setInterval(fetchGame, 2000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // Fetch tick count
-  useEffect(() => {
     async function fetchStatus() {
       try {
         const res = await fetch("/api/tournament/status");
@@ -49,10 +49,14 @@ export function TickCountdown() {
       }
     }
 
+    fetchGame();
     fetchStatus();
-    const interval = setInterval(fetchStatus, 2000);
+    const interval = setInterval(() => {
+      fetchGame();
+      fetchStatus();
+    }, pollMs);
     return () => clearInterval(interval);
-  }, []);
+  }, [pollMs]);
 
   // Update elapsed timer
   useEffect(() => {

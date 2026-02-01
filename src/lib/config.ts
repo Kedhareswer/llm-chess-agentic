@@ -2,12 +2,12 @@
  * AI Request Timeouts
  * 
  * Groq: 7s - Fast models, typically respond in 2-3s
- * Gemini: 15s - Slower initial response, non-streaming for reliability
+ * Gemini: 30s - Slower API with potential cold starts, needs more time for reliable responses
  * Gateway: 8s - Other providers via AI SDK
  */
 export const AI_TIMEOUTS = {
   GROQ_MS: 7_000,
-  GEMINI_MS: 15_000,
+  GEMINI_MS: 30_000, // Increased from 15s to 30s to handle API slowness and cold starts
   GATEWAY_MS: 8_000,
 } as const;
 
@@ -35,14 +35,18 @@ export const ELO_CONFIG = {
 } as const;
 
 /**
- * UI Polling Intervals
- * 
- * GAME_REFRESH_MS: How often to refresh active game
- * LEADERBOARD_REFRESH_MS: How often to refresh leaderboard
- * AUTO_TICK_MS: How often to auto-tick active games (must be > typical processing time ~5s)
+ * UI Polling Intervals (optimized for Vercel edge request quota)
+ *
+ * GAME_REFRESH_MS: Active game poll interval (visible tab)
+ * GAMES_LIST_REFRESH_MS: Game history / bulk list poll (visible tab)
+ * COMPLETED_GAME_REFRESH_MS: When game is complete, poll much less
+ * AUTO_TICK_MS: Auto-tick active games (must be > typical processing time ~5s)
+ * WHEN_TAB_HIDDEN_MS: Poll interval when tab is not visible
  */
 export const POLLING_INTERVALS = {
-  GAME_REFRESH_MS: 2_000,
-  LEADERBOARD_REFRESH_MS: 5_000,
-  AUTO_TICK_MS: 8_000, // Increased from 3s to 8s to avoid race conditions with 4-5s processing time
+  GAME_REFRESH_MS: 1_000, // Active game: poll every 1s to catch moves quickly and avoid batching
+  GAMES_LIST_REFRESH_MS: 15_000,
+  COMPLETED_GAME_REFRESH_MS: 60_000,
+  AUTO_TICK_MS: 8_000,
+  WHEN_TAB_HIDDEN_MS: 30_000,
 } as const;

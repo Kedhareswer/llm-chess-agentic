@@ -1,11 +1,13 @@
 import { streamText, generateText, createGateway } from "ai";
+import { createOpenAI } from "@ai-sdk/openai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { z } from "zod";
 import { APIKeyError, RateLimitError, TimeoutError, ParseError } from "./errors";
 import { AI_TIMEOUTS } from "./config";
 
-// Timeout constants - keep under Vercel Hobby 10s limit
+// Timeout constants - adjusted for each provider's typical response times
 // Non-streaming is simpler and more reliable for short JSON responses
+// Note: Gemini timeout increased to 30s to handle API slowness and cold starts
 
 /**
  * Wraps a promise with a timeout that rejects with a TimeoutError if the
@@ -33,62 +35,28 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
 
 /**
  * Makes a non-streaming API call to Groq with the provided parameters.
- * Uses standard OpenAI-compatible API with stream: false for simpler, more reliable responses.
- * 
+ * Uses @ai-sdk/openai with Groq baseURL + generateText (same pattern as Gemini).
+ *
  * @param model - The Groq model identifier
  * @param prompt - The prompt to send to the model
  * @param apiKey - The API key for Groq
  * @param timeoutMs - The timeout in milliseconds
  * @returns The complete response text from the model
  */
-async function callGroqAPINonStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number): Promise<string> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  
-  try {
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.5, // Lower temperature for more consistent JSON
-        stream: false, // Non-streaming for simpler handling
-      }),
-      signal: controller.signal,
-    });
+async function callGroqNonStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number): Promise<string> {
+  const groq = createOpenAI({
+    baseURL: "https://api.groq.com/openai/v1",
+    apiKey,
+  });
 
-    if (!response.ok) {
-      const error = await response.text();
-      
-      // Detect API key errors (401, 403)
-      if (response.status === 401 || response.status === 403) {
-        throw new APIKeyError('Groq', response.status);
-      }
-      
-      // Detect rate limit errors (429)
-      if (response.status === 429) {
-        const retryAfter = response.headers.get('retry-after');
-        throw new RateLimitError('Groq', retryAfter ? parseInt(retryAfter, 10) : undefined);
-      }
-      
-      throw new Error(`Groq API error ${response.status}: ${error}`);
-    }
+  const textPromise = generateText({
+    model: groq(model),
+    prompt,
+    temperature: 0.5,
+    maxOutputTokens: 200,
+  }).then((result) => result.text);
 
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || "";
-    
-    if (!content) {
-      throw new Error("Groq API returned empty response");
-    }
-    
-    return content;
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  return withTimeout(textPromise, timeoutMs, `Groq request for ${model}`);
 }
 
 /**
@@ -104,10 +72,13 @@ async function callGroqAPINonStreaming(model: string, prompt: string, apiKey: st
 async function callGeminiNonStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number): Promise<string> {
   const google = createGoogleGenerativeAI({ apiKey });
   
+  // Limit maxTokens to speed up generation and prevent overly long responses
+  // Chess moves are short (e.g., "e4", "Nf3"), so 200 tokens is more than enough
   const textPromise = generateText({
     model: google(model),
     prompt,
     temperature: 0.5,
+    maxOutputTokens: 200, // Limit response size for faster generation
   }).then(result => result.text);
   
   return withTimeout(textPromise, timeoutMs, `Gemini request for ${model}`);
@@ -339,7 +310,7 @@ export async function requestMove(
       
       if (isGroq && groqApiKey) {
         // Use non-streaming Groq API (simpler and more reliable)
-        text = await callGroqAPINonStreaming(groqModel!, prompt, groqApiKey, AI_TIMEOUTS.GROQ_MS);
+        text = await callGroqNonStreaming(groqModel!, prompt, groqApiKey, AI_TIMEOUTS.GROQ_MS);
       } else if (isGoogle && geminiApiKey) {
         // Use non-streaming Gemini API (more reliable for short JSON responses)
         text = await callGeminiNonStreaming(googleModel!, prompt, geminiApiKey, AI_TIMEOUTS.GEMINI_MS);
@@ -392,6 +363,19 @@ export async function requestMove(
           throw error;
         }
       } else {
+        // Map SDK APICallError (e.g. from @ai-sdk/openai) by statusCode
+        const statusCode = (error as { statusCode?: number }).statusCode;
+        if (statusCode === 401 || statusCode === 403) {
+          const provider = isGroq ? 'Groq' : isGoogle ? 'Google' : 'Unknown';
+          lastError = new APIKeyError(provider, statusCode);
+          throw lastError;
+        }
+        if (statusCode === 429) {
+          const provider = isGroq ? 'Groq' : isGoogle ? 'Google' : 'Unknown';
+          lastError = new RateLimitError(provider);
+          throw lastError;
+        }
+
         // Check for Gateway authentication errors (common when API keys are missing)
         if (errorMessage.includes('Gateway') && (errorMessage.includes('authentication') || errorMessage.includes('401') || 
             causeMessage.includes('authentication') || causeMessage.includes('401'))) {
@@ -428,9 +412,11 @@ export async function requestMove(
         }
       }
       
-      // If timeout on first attempt, try once more with shorter prompt
+      // If timeout on first attempt, wait a bit before retrying to avoid hammering the API
       if (attempt === 1 && lastError instanceof TimeoutError) {
-        console.log(`[requestMove] Timeout on attempt 1, will retry...`);
+        console.log(`[requestMove] Timeout on attempt 1, will retry after brief delay...`);
+        // Small delay before retry to avoid hammering slow APIs
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
   }

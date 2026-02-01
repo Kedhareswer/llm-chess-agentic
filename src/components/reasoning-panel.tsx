@@ -72,7 +72,8 @@ export function ReasoningPanel({
   onMoveClick,
   onViewSnapshot,
 }: ReasoningPanelProps) {
-  const modelMoves = moves.filter((m) => m.modelId === model.id);
+  // Filter by color to correctly handle same model playing both sides
+  const modelMoves = moves.filter((m) => m.color === color);
   const latestMove = modelMoves[modelMoves.length - 1];
   const config = PROVIDER_CONFIG[model.provider] || PROVIDER_CONFIG.openai;
 

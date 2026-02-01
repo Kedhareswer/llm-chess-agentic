@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { Header } from "@/components/header";
+import { AppShell } from "@/components/app-shell";
 
 export const metadata: Metadata = {
   title: "LLM Chess Arena",
@@ -15,10 +15,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="bg-white text-black">
-        <div className="flex h-screen flex-col">
-          <Header />
-          <main className="flex-1 overflow-y-auto">{children}</main>
-        </div>
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

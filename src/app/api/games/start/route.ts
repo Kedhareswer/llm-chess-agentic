@@ -20,8 +20,8 @@ export async function POST(request: Request) {
   
   const { modelIds, groqApiKey, geminiApiKey } = validation.data;
   const uniqueIds = Array.from(new Set(modelIds)).filter(Boolean);
-  if (uniqueIds.length < 2) {
-    return NextResponse.json({ error: "Select at least two models" }, { status: 400 });
+  if (uniqueIds.length < 1 || modelIds.length < 2) {
+    return NextResponse.json({ error: "Select models for both sides" }, { status: 400 });
   }
 
   // Use transaction to prevent race condition
@@ -47,14 +47,23 @@ export async function POST(request: Request) {
         .from(models)
         .where(and(inArray(models.id, uniqueIds), eq(models.active, true)));
 
-      if (activeModels.length < 2) {
+      if (activeModels.length < 1) {
         throw new Error("Selected models must exist and be active");
       }
 
-      // Pick first two selected active models
-      const [m1, m2] = activeModels;
-      const white = Math.random() < 0.5 ? m1 : m2;
-      const black = white.id === m1.id ? m2 : m1;
+      // Create a map for quick lookup
+      const modelMap = new Map(activeModels.map(m => [m.id, m]));
+      
+      // Respect the order: first model is white, second is black
+      const whiteModel = modelMap.get(modelIds[0]);
+      const blackModel = modelMap.get(modelIds[1]);
+      
+      if (!whiteModel || !blackModel) {
+        throw new Error("Selected models must exist and be active");
+      }
+      
+      const white = whiteModel;
+      const black = blackModel;
 
       const gameId = randomUUID();
       await tx.insert(games).values({
