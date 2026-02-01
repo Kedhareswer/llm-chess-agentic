@@ -109,6 +109,7 @@ interface PromptParams {
   color: "white" | "black";
   legalMoves: string[];
   lastMoves: string[];
+  lastMovesWithColor?: Array<{ move: string; color: "white" | "black" }>;
   errorContext?: string;
 }
 
@@ -119,9 +120,47 @@ interface PromptParams {
  * @returns A formatted string prompt for the AI model
  */
 export function buildPrompt(params: PromptParams): string {
-  const { fen, color, legalMoves, lastMoves, errorContext } = params;
+  const { fen, color, legalMoves, lastMoves, lastMovesWithColor, errorContext } = params;
 
-  let prompt = `You are playing chess as ${color} against another AI model.
+  // Detect repetition patterns - only check moves made by THIS player
+  const myRecentMoves = lastMovesWithColor 
+    ? lastMovesWithColor
+        .filter(m => m.color === color)
+        .map(m => m.move)
+        .slice(-6)
+    : lastMoves.slice(-6); // Fallback if color info not available
+  
+  let repetitionWarning = "";
+  let pieceRepetition = "";
+  
+  if (myRecentMoves.length >= 4) {
+    const lastFewMoves = myRecentMoves.slice(-4);
+    
+    // Check for A-B-A-B pattern
+    if (lastFewMoves.length >= 4 &&
+        lastFewMoves[0] === lastFewMoves[2] &&
+        lastFewMoves[1] === lastFewMoves[3]) {
+      repetitionWarning = "\n\n⚠️ CRITICAL: You are repeating moves! This is poor chess. Vary your play - use different pieces, develop new pieces, create threats. Do NOT repeat the same move pattern.";
+    }
+    // Check if same move repeated
+    else if (lastFewMoves[lastFewMoves.length - 1] === lastFewMoves[lastFewMoves.length - 2]) {
+      repetitionWarning = "\n\n⚠️ CRITICAL: You just repeated a move! This is weak play. Use a DIFFERENT piece. Develop undeveloped pieces. Create new threats.";
+    }
+    
+    // Detect if same piece type is being moved repeatedly
+    const piecePatterns = myRecentMoves.slice(-4).map(move => {
+      if (move.startsWith("O-")) return "K"; // Castling
+      if (/^[KQRBN]/.test(move)) return move[0];
+      return "P"; // Pawn move
+    });
+    
+    if (piecePatterns.length >= 3 && piecePatterns.every(p => p === piecePatterns[piecePatterns.length - 1])) {
+      const pieceName = piecePatterns[0] === "K" ? "king" : piecePatterns[0] === "Q" ? "queen" : piecePatterns[0] === "R" ? "rook" : piecePatterns[0] === "B" ? "bishop" : piecePatterns[0] === "N" ? "knight" : "pawn";
+      pieceRepetition = `\n\n⚠️ WARNING: You are moving the same type of piece (${pieceName}) repeatedly! This is weak play. Develop ALL your pieces - use your rooks, bishops, knights, and queen. Coordinate your entire army, not just one or two pieces.`;
+    }
+  }
+
+  let prompt = `You are playing chess as ${color} against another AI model. Play strong, diverse chess using ALL your pieces.
 
 Current position (FEN): ${fen}
 ${lastMoves.length > 0 ? `Recent moves: ${lastMoves.join(", ")}` : "This is the first move."}
@@ -129,11 +168,21 @@ ${lastMoves.length > 0 ? `Recent moves: ${lastMoves.join(", ")}` : "This is the 
 CRITICAL: You MUST choose ONE move from this exact list of legal moves:
 ${legalMoves.join(", ")}
 
-${errorContext ? `IMPORTANT: ${errorContext}\n\n` : ""}Analyze the position and choose your move. Consider:
-- Material balance
-- Piece activity
-- King safety
-- Pawn structure
+${errorContext ? `IMPORTANT: ${errorContext}\n\n` : ""}${repetitionWarning}${pieceRepetition}
+
+STRATEGIC GUIDELINES - Follow these principles:
+1. **Use ALL your pieces**: Develop rooks, bishops, knights, and queen. Don't rely on just one or two pieces.
+2. **Avoid repetition**: Do NOT repeat moves unnecessarily. If you just moved a piece, consider moving a different piece next.
+3. **Piece development**: Get all pieces into active positions. Undeveloped pieces are wasted resources.
+4. **Coordinate your army**: Work with multiple pieces together, not in isolation.
+5. **Create threats**: Use different pieces to create various threats - don't tunnel vision on one idea.
+6. **Material balance**: Consider exchanges and material value.
+7. **King safety**: Keep your king safe, especially in the middlegame.
+8. **Pawn structure**: Maintain healthy pawn structure and avoid weaknesses.
+9. **Control the center**: Centralize your pieces when possible.
+10. **Think ahead**: Consider your opponent's responses and plan multiple moves ahead.
+
+${repetitionWarning || pieceRepetition ? "REMEMBER: Strong chess requires using your entire army, not repeating moves with the same pieces!" : ""}
 
 RESPONSE FORMAT - You must respond with ONLY this JSON format:
 {"move": "e4", "reasoning": "brief explanation"}

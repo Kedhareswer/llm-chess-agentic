@@ -67,9 +67,9 @@ export async function processGame(game: Game): Promise<void> {
     return;
   }
 
-  // Get recent moves for context
+  // Get recent moves for context (include color for repetition detection)
   const recentMoves = await db
-    .select({ moveSan: moves.moveSan })
+    .select({ moveSan: moves.moveSan, color: moves.color })
     .from(moves)
     .where(eq(moves.gameId, currentGame.id))
     .orderBy(moves.moveNumber)
@@ -89,6 +89,7 @@ export async function processGame(game: Game): Promise<void> {
       color: color as "white" | "black",
       legalMoves,
       lastMoves: recentMoves.map(m => m.moveSan),
+      lastMovesWithColor: recentMoves.map(m => ({ move: m.moveSan, color: m.color })),
     }, modelId, { groqApiKey, geminiApiKey });
   } catch (err) {
     console.error(`[processGame] Move request failed for ${modelId}:`, err);
@@ -280,6 +281,7 @@ async function judgeMoveForTurn(
     color: "white" | "black";
     legalMoves: string[];
     lastMoves: string[];
+    lastMovesWithColor?: Array<{ move: string; color: "white" | "black" }>;
   },
   modelId: string,
   keys: { groqApiKey?: string; geminiApiKey?: string },
@@ -302,7 +304,52 @@ async function judgeMoveForTurn(
 
       // Hard check against chess.js as the final judge.
       if (validateMove(baseParams.fen, response.move)) {
-        const warningNote = attempt > 1 ? ` ⚠ Judge retry (${attempt - 1} prior illegal attempt${attempt - 1 > 1 ? "s" : ""})` : "";
+        // Check for repetition patterns BEFORE accepting the move
+        // Only check moves made by THIS player (same color)
+        const myRecentMoves = baseParams.lastMovesWithColor 
+          ? baseParams.lastMovesWithColor
+              .filter(m => m.color === baseParams.color)
+              .map(m => m.move)
+              .slice(-6)
+          : baseParams.lastMoves.slice(-6); // Fallback if color info not available
+        const proposedMove = response.move;
+        let repetitionDetected = false;
+        
+        if (myRecentMoves.length >= 4) {
+          const lastMove = myRecentMoves[myRecentMoves.length - 1];
+          const secondLastMove = myRecentMoves[myRecentMoves.length - 2];
+          const thirdLastMove = myRecentMoves[myRecentMoves.length - 3];
+          const fourthLastMove = myRecentMoves[myRecentMoves.length - 4];
+          
+          // Pattern: A-B-A-B repetition (e.g., Kd7-Kc8-Kd7-Kc8)
+          if (proposedMove === thirdLastMove && lastMove === secondLastMove && lastMove !== proposedMove) {
+            repetitionDetected = true;
+            errorContext = `⚠️ REPETITION WARNING: You are repeating moves (${secondLastMove} -> ${proposedMove} -> ${lastMove} -> ${proposedMove}). This is weak chess! Use DIFFERENT pieces. Develop ALL your pieces - rooks, bishops, knights, queen. Coordinate your entire army. Do NOT repeat this pattern. Choose a different move.`;
+          }
+          // Pattern: Same move repeated consecutively or very recently
+          else if (proposedMove === lastMove || proposedMove === secondLastMove) {
+            repetitionDetected = true;
+            errorContext = `⚠️ REPETITION WARNING: You just played "${proposedMove}" recently. Do NOT repeat moves! Use a DIFFERENT piece. Develop undeveloped pieces. Create new threats. Vary your play. Choose a different move from the legal moves list.`;
+          }
+          // Pattern: Same piece type moving repeatedly (e.g., all knight moves, all king moves)
+          else {
+            const proposedPiece = proposedMove.startsWith("O-") ? "K" : /^[KQRBN]/.test(proposedMove) ? proposedMove[0] : "P";
+            const recentPieces = myRecentMoves.slice(-3).map(m => m.startsWith("O-") ? "K" : /^[KQRBN]/.test(m) ? m[0] : "P");
+            if (recentPieces.length >= 3 && recentPieces.every(p => p === proposedPiece)) {
+              repetitionDetected = true;
+              const pieceName = proposedPiece === "K" ? "king" : proposedPiece === "Q" ? "queen" : proposedPiece === "R" ? "rook" : proposedPiece === "B" ? "bishop" : proposedPiece === "N" ? "knight" : "pawn";
+              errorContext = `⚠️ PIECE REPETITION WARNING: You are moving the same type of piece (${pieceName}) repeatedly. Use DIFFERENT pieces! Develop your rooks, bishops, knights, and queen. Coordinate your entire army. Don't tunnel vision on one piece type. Choose a move with a different piece.`;
+            }
+          }
+        }
+        
+        // If repetition detected and we have retries left, warn and retry
+        if (repetitionDetected && attempt < GAME_RULES.MAX_JUDGE_ATTEMPTS) {
+          console.warn(`[judgeMoveForTurn] Repetition detected for ${modelId}: "${proposedMove}". Warning and retrying...`);
+          continue; // Retry with errorContext warning
+        }
+        
+        const warningNote = attempt > 1 ? ` ⚠ Judge retry (${attempt - 1} prior ${repetitionDetected ? "repetitive" : "illegal"} attempt${attempt - 1 > 1 ? "s" : ""})` : "";
         const annotated = warningNote ? { ...response, reasoning: `${response.reasoning}${warningNote}` } : response;
         console.log(`[judgeMoveForTurn] Accepted legal move "${response.move}" for ${modelId}${warningNote ? " after warning" : ""}`);
         return annotated;
