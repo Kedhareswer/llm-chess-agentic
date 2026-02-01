@@ -58,29 +58,73 @@ export function getTurn(fen: string): "w" | "b" {
 
 /**
  * Checks if the game is over (checkmate, stalemate, draw by repetition, etc.).
+ * Requires PGN for proper threefold repetition detection.
  * 
  * @param fen - The Forsyth-Edwards Notation string representing the board position
+ * @param pgn - Optional PGN string with full move history (required for repetition detection)
  * @returns True if the game is over, false otherwise
  */
-export function isGameOver(fen: string): boolean {
-  const chess = new Chess(fen);
+export function isGameOver(fen: string, pgn?: string): boolean {
+  const chess = pgn ? new Chess(pgn) : new Chess(fen);
   return chess.isGameOver();
 }
 
 /**
  * Gets the result of the game if it's over.
+ * Requires PGN for proper threefold repetition detection.
  * 
  * @param fen - The Forsyth-Edwards Notation string representing the board position
+ * @param pgn - Optional PGN string with full move history (required for repetition detection)
  * @returns The game result ('1-0' for white win, '0-1' for black win, '1/2-1/2' for draw) or null if game is not over
  */
-export function getGameResult(fen: string): "1-0" | "0-1" | "1/2-1/2" | null {
-  const chess = new Chess(fen);
+export function getGameResult(fen: string, pgn?: string): "1-0" | "0-1" | "1/2-1/2" | null {
+  const chess = pgn ? new Chess(pgn) : new Chess(fen);
   if (!chess.isGameOver()) return null;
 
   if (chess.isCheckmate()) {
     return chess.turn() === "w" ? "0-1" : "1-0";
   }
+  
+  // Check for specific draw reasons
+  if (pgn) {
+    if (chess.isThreefoldRepetition()) {
+      return "1/2-1/2";
+    }
+    if (chess.isDraw()) {
+      return "1/2-1/2";
+    }
+  }
+  
   return "1/2-1/2"; // stalemate or draw
+}
+
+/**
+ * Gets a detailed reason for why the game ended.
+ * 
+ * @param fen - The Forsyth-Edwards Notation string representing the board position
+ * @param pgn - Optional PGN string with full move history
+ * @returns A string describing why the game ended, or null if game is not over
+ */
+export function getGameEndReason(fen: string, pgn?: string): string | null {
+  const chess = pgn ? new Chess(pgn) : new Chess(fen);
+  if (!chess.isGameOver()) return null;
+
+  if (chess.isCheckmate()) {
+    return "Checkmate";
+  }
+  if (chess.isStalemate()) {
+    return "Stalemate";
+  }
+  if (pgn && chess.isThreefoldRepetition()) {
+    return "Draw by threefold repetition";
+  }
+  if (pgn && chess.isDraw()) {
+    if (chess.isDrawByFiftyMoves()) {
+      return "Draw by fifty-move rule";
+    }
+    return "Draw by insufficient material";
+  }
+  return "Draw";
 }
 
 /**

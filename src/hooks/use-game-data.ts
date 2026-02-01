@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import type { Game, Move, Model } from "@/db/schema";
 import { usePageVisibility } from "@/hooks/use-page-visibility";
 import { POLLING_INTERVALS } from "@/lib/config";
@@ -27,6 +27,8 @@ export function useGameData(gameId: string | null): UseGameDataResult {
   const [data, setData] = useState<GameData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
+  const previousMoveCountRef = useRef<number>(0);
+  const refetchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const visible = usePageVisibility();
 
   const fetchGame = useCallback(async () => {
@@ -41,7 +43,38 @@ export function useGameData(gameId: string | null): UseGameDataResult {
       }
 
       const gameData = await res.json();
-      setData(gameData);
+      const currentMoveCount = gameData.moves?.length || 0;
+      const previousMoveCount = previousMoveCountRef.current;
+      
+      setData((prevData) => {
+        const wasActive = prevData?.game?.status === "active";
+        const isActive = gameData.game?.status === "active";
+        
+        // If move count increased and game is active, schedule immediate refetch to catch rapid moves
+        if (currentMoveCount > previousMoveCount && wasActive && isActive) {
+          // Clear any pending timeout
+          if (refetchTimeoutRef.current) {
+            clearTimeout(refetchTimeoutRef.current);
+          }
+          // Schedule immediate refetch after a short delay to catch the next move
+          refetchTimeoutRef.current = setTimeout(() => {
+            // Use a fresh fetch to avoid stale closure
+            fetch(`/api/games/${gameId}`)
+              .then(res => res.ok ? res.json() : null)
+              .then(data => {
+                if (data) {
+                  setData(data);
+                  previousMoveCountRef.current = data.moves?.length || 0;
+                }
+              })
+              .catch(() => {});
+          }, 300);
+        }
+        
+        return gameData;
+      });
+      
+      previousMoveCountRef.current = currentMoveCount;
     } catch (err) {
       setError(err instanceof Error ? err : new Error(String(err)));
     } finally {
@@ -64,7 +97,12 @@ export function useGameData(gameId: string | null): UseGameDataResult {
       : POLLING_INTERVALS.WHEN_TAB_HIDDEN_MS;
 
     const interval = setInterval(fetchGame, ms);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      if (refetchTimeoutRef.current) {
+        clearTimeout(refetchTimeoutRef.current);
+      }
+    };
   }, [gameId, visible, data?.game?.status, fetchGame]);
 
   return { data, loading, error, refetch: fetchGame };

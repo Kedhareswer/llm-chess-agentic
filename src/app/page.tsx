@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { Chessboard } from "react-chessboard";
 import { ModelSelector, SKILL_MODES, type SkillMode } from "@/components/model-selector";
 import { ReasoningPanel } from "@/components/reasoning-panel";
@@ -70,6 +70,9 @@ export default function Home() {
     checkActiveGame();
   }, []);
 
+  const previousMoveCountRef = useRef<number>(0);
+  const refetchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   // Fetch game data when we have an active game
   const fetchGameData = useCallback(async () => {
     if (!activeGameId) return;
@@ -77,16 +80,33 @@ export default function Home() {
       const res = await fetch(`/api/games/${activeGameId}`);
       if (!res.ok) return;
       const data = await res.json();
+      const currentMoveCount = data.moves?.length || 0;
+      const previousMoveCount = previousMoveCountRef.current;
+      const wasActive = gameData?.game?.status === "active";
+      
       setGameData(data);
+      previousMoveCountRef.current = currentMoveCount;
 
       // Check if game finished
       if (data.game.status === "complete") {
         setGameState("finished");
       }
+      
+      // If move count increased and game is active, schedule immediate refetch to catch rapid moves
+      if (currentMoveCount > previousMoveCount && wasActive && data.game?.status === "active") {
+        // Clear any pending timeout
+        if (refetchTimeoutRef.current) {
+          clearTimeout(refetchTimeoutRef.current);
+        }
+        // Schedule immediate refetch after a short delay to catch the next move
+        refetchTimeoutRef.current = setTimeout(() => {
+          fetchGameData();
+        }, 300);
+      }
     } catch {
       // Ignore fetch errors
     }
-  }, [activeGameId]);
+  }, [activeGameId, gameData?.game?.status]);
 
   // Poll for game updates (slower when tab hidden or game complete)
   useEffect(() => {
@@ -98,7 +118,12 @@ export default function Home() {
         : POLLING_INTERVALS.GAME_REFRESH_MS
       : POLLING_INTERVALS.WHEN_TAB_HIDDEN_MS;
     const interval = setInterval(fetchGameData, ms);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      if (refetchTimeoutRef.current) {
+        clearTimeout(refetchTimeoutRef.current);
+      }
+    };
   }, [activeGameId, fetchGameData, visible, gameData?.game?.status]);
 
   // Auto-tick for active games; refetch game data immediately after tick so the board updates with no lag

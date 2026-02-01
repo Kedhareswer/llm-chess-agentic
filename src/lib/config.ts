@@ -44,7 +44,7 @@ export const ELO_CONFIG = {
  * WHEN_TAB_HIDDEN_MS: Poll interval when tab is not visible
  */
 export const POLLING_INTERVALS = {
-  GAME_REFRESH_MS: 2_000, // Active game: poll every 2s so board feels snappy; refetch-after-tick gives instant update when tick runs
+  GAME_REFRESH_MS: 1_000, // Active game: poll every 1s to catch moves quickly and avoid batching
   GAMES_LIST_REFRESH_MS: 15_000,
   COMPLETED_GAME_REFRESH_MS: 60_000,
   AUTO_TICK_MS: 8_000,

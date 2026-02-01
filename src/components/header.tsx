@@ -1,8 +1,10 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useLeaderboard } from "@/contexts/leaderboard-context";
+import { useRouter } from "next/navigation";
 
 interface HeaderProps {
   onMenuClick: () => void;
@@ -11,6 +13,48 @@ interface HeaderProps {
 
 export function Header({ onMenuClick, onSettingsClick }: HeaderProps) {
   const { refetch, isRefetching } = useLeaderboard();
+  const router = useRouter();
+  const [hasActiveGame, setHasActiveGame] = useState(false);
+  const [destroying, setDestroying] = useState(false);
+
+  // Check for active game
+  useEffect(() => {
+    async function checkActiveGame() {
+      try {
+        const res = await fetch("/api/games?status=active");
+        if (res.ok) {
+          const data = await res.json();
+          setHasActiveGame(data.games?.length > 0);
+        }
+      } catch {
+        // Ignore errors
+      }
+    }
+    checkActiveGame();
+    // Poll every 5 seconds to update button state
+    const interval = setInterval(checkActiveGame, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  async function handleDestroy() {
+    if (!hasActiveGame || destroying) return;
+    setDestroying(true);
+    try {
+      const res = await fetch("/api/games/destroy", { method: "POST" });
+      const data = await res.json();
+      if (data.aborted > 0 || data.success) {
+        setHasActiveGame(false);
+        // Refresh the page to update UI
+        router.refresh();
+        // Also refetch leaderboard
+        refetch();
+      }
+    } catch (error) {
+      console.error("Failed to destroy game:", error);
+    } finally {
+      setDestroying(false);
+    }
+  }
 
   return (
     <header className="border-b border-gray-200 bg-white">
@@ -21,6 +65,18 @@ export function Header({ onMenuClick, onSettingsClick }: HeaderProps) {
         </Link>
 
         <div className="flex items-center gap-2">
+          {hasActiveGame && (
+            <button
+              onClick={handleDestroy}
+              disabled={destroying}
+              className="px-3 py-1.5 text-sm font-semibold text-red-700 border border-red-300 bg-red-50 hover:bg-red-100 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              aria-label="Destroy active game"
+              title="Destroy active game"
+              data-testid="destroy-game-button"
+            >
+              {destroying ? "Destroying..." : "Destroy Game"}
+            </button>
+          )}
           <button
             onClick={() => refetch()}
             disabled={isRefetching}
