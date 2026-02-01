@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useRef } from "react";
 import type { Model } from "@/db/schema";
-import { POLLING_INTERVALS } from "@/lib/config";
+import { useLeaderboard } from "@/contexts/leaderboard-context";
 
 // Track ELO changes for animations
 interface EloChange {
@@ -14,7 +14,7 @@ interface EloChange {
 }
 
 export function Leaderboard() {
-  const [models, setModels] = useState<Model[]>([]);
+  const { models, refetch } = useLeaderboard();
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [groqKey, setGroqKey] = useState("");
@@ -31,78 +31,56 @@ export function Leaderboard() {
   const previousRanksRef = useRef<Map<string, number>>(new Map());
   const [reorderedIds, setReorderedIds] = useState<Set<string>>(new Set());
 
+  // Detect ELO and rank changes when context models update
   useEffect(() => {
-    async function fetchLeaderboard() {
-      try {
-        const res = await fetch("/api/leaderboard");
-        if (!res.ok) return;
-        const data = await res.json();
-        const newModels: Model[] = data.models;
-        
-        // Detect ELO changes
-        const now = Date.now();
-        const newChanges: Record<string, EloChange> = {};
-        const newReordered = new Set<string>();
-        
-        newModels.forEach((model, index) => {
-          const prevModel = previousModelsRef.current.get(model.id);
-          const prevRank = previousRanksRef.current.get(model.id);
-          
-          // Check for ELO change
-          if (prevModel && prevModel.elo !== model.elo) {
-            newChanges[model.id] = {
-              modelId: model.id,
-              previousElo: prevModel.elo,
-              currentElo: model.elo,
-              delta: model.elo - prevModel.elo,
-              timestamp: now,
-            };
-          }
-          
-          // Check for rank change
-          if (prevRank !== undefined && prevRank !== index) {
-            newReordered.add(model.id);
+    if (models.length === 0) return;
+
+    const now = Date.now();
+    const newChanges: Record<string, EloChange> = {};
+    const newReordered = new Set<string>();
+
+    models.forEach((model, index) => {
+      const prevModel = previousModelsRef.current.get(model.id);
+      const prevRank = previousRanksRef.current.get(model.id);
+
+      if (prevModel && prevModel.elo !== model.elo) {
+        newChanges[model.id] = {
+          modelId: model.id,
+          previousElo: prevModel.elo,
+          currentElo: model.elo,
+          delta: model.elo - prevModel.elo,
+          timestamp: now,
+        };
+      }
+
+      if (prevRank !== undefined && prevRank !== index) {
+        newReordered.add(model.id);
+      }
+    });
+
+    previousModelsRef.current = new Map(models.map(m => [m.id, m]));
+    previousRanksRef.current = new Map(models.map((m, i) => [m.id, i]));
+
+    if (Object.keys(newChanges).length > 0) {
+      setEloChanges(prev => {
+        const merged = { ...prev };
+        Object.entries(newChanges).forEach(([id, change]) => {
+          merged[id] = change;
+        });
+        Object.keys(merged).forEach(id => {
+          if (now - merged[id].timestamp > 5000) {
+            delete merged[id];
           }
         });
-        
-        // Update refs for next comparison
-        previousModelsRef.current = new Map(newModels.map(m => [m.id, m]));
-        previousRanksRef.current = new Map(newModels.map((m, i) => [m.id, i]));
-        
-        // Merge new changes with existing (keep recent ones)
-        if (Object.keys(newChanges).length > 0) {
-          setEloChanges(prev => {
-            const merged = { ...prev };
-            Object.entries(newChanges).forEach(([id, change]) => {
-              merged[id] = change;
-            });
-            // Clean up old changes (older than 5 seconds)
-            Object.keys(merged).forEach(id => {
-              if (now - merged[id].timestamp > 5000) {
-                delete merged[id];
-              }
-            });
-            return merged;
-          });
-        }
-        
-        if (newReordered.size > 0) {
-          setReorderedIds(newReordered);
-          // Clear reorder animation after it plays
-          setTimeout(() => setReorderedIds(new Set()), 500);
-        }
-        
-        setModels(newModels);
-      } catch (err) {
-        // Silently handle network errors to prevent UI crashes
-        console.error('Failed to fetch leaderboard:', err);
-      }
+        return merged;
+      });
     }
 
-    fetchLeaderboard();
-    const interval = setInterval(fetchLeaderboard, POLLING_INTERVALS.LEADERBOARD_REFRESH_MS);
-    return () => clearInterval(interval);
-  }, []);
+    if (newReordered.size > 0) {
+      setReorderedIds(newReordered);
+      setTimeout(() => setReorderedIds(new Set()), 500);
+    }
+  }, [models]);
 
   async function handleSaveGeminiKey() {
     setGeminiSaving(true);
@@ -217,8 +195,6 @@ export function Leaderboard() {
   }
 
   async function handleToggleModel(id: string, active: boolean) {
-    const prev = models;
-    setModels((ms) => ms.map((m) => (m.id === id ? { ...m, active } : m)));
     try {
       const res = await fetch("/api/models/active", {
         method: "POST",
@@ -228,8 +204,9 @@ export function Leaderboard() {
       if (!res.ok) {
         throw new Error("Toggle failed");
       }
+      await refetch();
     } catch {
-      setModels(prev); // revert
+      // Toggle failed; context will reflect server state on next poll
     }
   }
 

@@ -54,6 +54,8 @@ export const tournament = pgTable("tournament", {
   tickIntervalSec: integer("tick_interval_sec").notNull().default(60),
   lastTickAt: timestamp("last_tick_at"),
   startedAt: timestamp("started_at"),
+  groqApiKey: text("groq_api_key"), // Global API key for Groq models
+  geminiApiKey: text("gemini_api_key"), // Global API key for Gemini models
 });
 
 export type Model = typeof models.$inferSelect;

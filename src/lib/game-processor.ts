@@ -45,8 +45,8 @@ export async function processGame(game: Game): Promise<void> {
   }
 
   // Use game-specific API keys if available, otherwise fall back to global keys
-  const groqApiKey = currentGame.groqApiKey || getGroqApiKey();
-  const geminiApiKey = currentGame.geminiApiKey || getGeminiApiKey();
+  const groqApiKey = currentGame.groqApiKey || (await getGroqApiKey());
+  const geminiApiKey = currentGame.geminiApiKey || (await getGeminiApiKey());
   console.log(`[processGame] Game ${currentGame.id}, groqApiKey present: ${!!groqApiKey}, geminiKey present: ${!!geminiApiKey}`);
 
   const turn = getTurn(currentGame.fen);

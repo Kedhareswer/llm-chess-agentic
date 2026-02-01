@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useChessSounds } from "@/hooks/use-chess-sounds";
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -15,6 +16,17 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [groqMessage, setGroqMessage] = useState<{ text: string; isError: boolean } | null>(null);
   const [geminiMessage, setGeminiMessage] = useState<{ text: string; isError: boolean } | null>(null);
   const modalRef = useRef<HTMLDivElement>(null);
+  
+  const { getSettings, updateSettings, sounds } = useChessSounds();
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [soundVolume, setSoundVolume] = useState(0.5);
+
+  // Load sound settings on mount
+  useEffect(() => {
+    const settings = getSettings();
+    setSoundEnabled(settings.enabled);
+    setSoundVolume(settings.volume);
+  }, [getSettings]);
 
   // Close on escape key
   useEffect(() => {
@@ -210,6 +222,67 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 aistudio.google.com
               </a>
             </p>
+          </div>
+
+          {/* Sound Settings */}
+          <div className="space-y-3 border-t border-gray-200 pt-6">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-semibold text-gray-700">Sound Effects</label>
+            </div>
+            <div className="flex items-center gap-3">
+              <input
+                type="checkbox"
+                id="sound-enabled"
+                checked={soundEnabled}
+                onChange={(e) => {
+                  const enabled = e.target.checked;
+                  setSoundEnabled(enabled);
+                  updateSettings({ enabled });
+                  // Play test sound when enabling
+                  if (enabled && sounds) {
+                    setTimeout(() => sounds.playMove(), 100);
+                  }
+                }}
+                className="w-4 h-4 text-orange-600 border-gray-300 rounded focus:ring-orange-500"
+              />
+              <label htmlFor="sound-enabled" className="text-sm text-gray-700 cursor-pointer">
+                Enable move sounds
+              </label>
+            </div>
+            {soundEnabled && (
+              <div className="space-y-2 pl-7">
+                <label className="text-xs text-gray-600">Volume</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={soundVolume * 100}
+                    onChange={(e) => {
+                      const volume = parseInt(e.target.value) / 100;
+                      setSoundVolume(volume);
+                      updateSettings({ volume });
+                    }}
+                    className="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-orange-600"
+                  />
+                  <span className="text-xs text-gray-600 w-10 text-right">
+                    {Math.round(soundVolume * 100)}%
+                  </span>
+                </div>
+                <button
+                  onClick={() => {
+                    if (sounds) {
+                      sounds.playMove();
+                      setTimeout(() => sounds.playCapture(), 200);
+                      setTimeout(() => sounds.playCheck(), 400);
+                    }
+                  }}
+                  className="text-xs text-gray-600 hover:text-gray-800 underline"
+                >
+                  Test sounds
+                </button>
+              </div>
+            )}
           </div>
         </div>
 

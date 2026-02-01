@@ -1,11 +1,16 @@
 import { describe, it, expect, vi } from "vitest";
 import { APIKeyError, RateLimitError, TimeoutError, ParseError } from "./errors";
 
-// Mock the AI SDK and Google SDK
-vi.mock("ai", () => ({
-  streamText: vi.fn(),
-  createGateway: vi.fn(() => vi.fn()),
-}));
+// Mock the AI SDK (generateText delegates to real by default; override streamText/createGateway)
+vi.mock("ai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("ai")>();
+  return {
+    ...actual,
+    generateText: vi.fn((...args: unknown[]) => (actual.generateText as (...a: unknown[]) => Promise<{ text: string }>)(...args)),
+    streamText: vi.fn(),
+    createGateway: vi.fn(() => vi.fn()),
+  };
+});
 
 vi.mock("@ai-sdk/google", () => ({
   createGoogleGenerativeAI: vi.fn(() => vi.fn()),
@@ -13,12 +18,8 @@ vi.mock("@ai-sdk/google", () => ({
 
 describe("AI error handling", () => {
   it("should throw APIKeyError for 401 status from Groq", async () => {
-    // Mock fetch to return 401
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 401,
-      text: async () => "Unauthorized",
-    });
+    // Mock fetch to return 401 (use Response so SDK gets iterable headers)
+    global.fetch = vi.fn().mockResolvedValue(new Response("Unauthorized", { status: 401 }));
 
     const { requestMove } = await import("./ai");
 
@@ -38,15 +39,10 @@ describe("AI error handling", () => {
   });
 
   it("should throw RateLimitError for 429 status from Groq", async () => {
-    // Mock fetch to return 429
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 429,
-      text: async () => "Rate limit exceeded",
-      headers: {
-        get: (name: string) => (name === "retry-after" ? "60" : null),
-      },
-    });
+    // Mock generateText to throw SDK-style error with statusCode 429 (avoids SDK retry/timeout)
+    const err = Object.assign(new Error("Rate limit"), { statusCode: 429 });
+    const ai = await import("ai");
+    vi.mocked(ai.generateText).mockRejectedValueOnce(err);
 
     const { requestMove } = await import("./ai");
 
@@ -66,24 +62,11 @@ describe("AI error handling", () => {
   });
 
   it("should throw ParseError when AI response cannot be parsed", async () => {
-    // Mock fetch to return unparseable response
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      body: {
-        getReader: () => ({
-          read: vi
-            .fn()
-            .mockResolvedValueOnce({
-              done: false,
-              value: new TextEncoder().encode(
-                'data: {"choices":[{"delta":{"content":"This is not a valid move response"}}]}\n'
-              ),
-            })
-            .mockResolvedValueOnce({ done: true }),
-          cancel: vi.fn(),
-        }),
-      },
-    });
+    // Mock generateText to return unparseable content (SDK uses Responses API; avoid depending on its format)
+    const ai = await import("ai");
+    vi.mocked(ai.generateText).mockResolvedValueOnce({
+      text: "This is not a valid move response",
+    } as Awaited<ReturnType<typeof ai.generateText>>);
 
     const { requestMove } = await import("./ai");
 

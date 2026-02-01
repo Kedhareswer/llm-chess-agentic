@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { useLeaderboard } from "@/contexts/leaderboard-context";
 
 interface HeaderProps {
   onMenuClick: () => void;
@@ -9,6 +10,8 @@ interface HeaderProps {
 }
 
 export function Header({ onMenuClick, onSettingsClick }: HeaderProps) {
+  const { refetch, isRefetching } = useLeaderboard();
+
   return (
     <header className="border-b border-gray-200 bg-white">
       <div className="flex h-14 items-center justify-between px-4">
@@ -18,6 +21,27 @@ export function Header({ onMenuClick, onSettingsClick }: HeaderProps) {
         </Link>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => refetch()}
+            disabled={isRefetching}
+            className="p-2 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
+            aria-label="Refresh leaderboard and data"
+            title="Refresh data"
+          >
+            <svg
+              className={`w-6 h-6 text-gray-700 ${isRefetching ? "animate-spin" : ""}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+              />
+            </svg>
+          </button>
           <button
             onClick={onSettingsClick}
             className="p-2 hover:bg-gray-100 rounded-lg transition-colors"

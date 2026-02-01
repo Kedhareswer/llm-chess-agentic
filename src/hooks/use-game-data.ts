@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { Game, Move, Model } from "@/db/schema";
+import { usePageVisibility } from "@/hooks/use-page-visibility";
+import { POLLING_INTERVALS } from "@/lib/config";
 
 export interface GameData {
   game: Game;
@@ -18,29 +20,26 @@ export interface UseGameDataResult {
 }
 
 /**
- * Hook to fetch and auto-refresh game data
- * @param gameId - Game ID to fetch
- * @param refreshInterval - Auto-refresh interval in ms (default: 5000)
+ * Hook to fetch and auto-refresh game data.
+ * Uses slower polling when tab is hidden or when game is complete (Vercel-friendly).
  */
-export function useGameData(
-  gameId: string | null,
-  refreshInterval = 5000
-): UseGameDataResult {
+export function useGameData(gameId: string | null): UseGameDataResult {
   const [data, setData] = useState<GameData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
+  const visible = usePageVisibility();
 
   const fetchGame = useCallback(async () => {
     if (!gameId) return;
-    
+
     try {
       setError(null);
       const res = await fetch(`/api/games/${gameId}`);
-      
+
       if (!res.ok) {
         throw new Error(`Failed to fetch game: ${res.status}`);
       }
-      
+
       const gameData = await res.json();
       setData(gameData);
     } catch (err) {
@@ -57,9 +56,16 @@ export function useGameData(
     }
 
     fetchGame();
-    const interval = setInterval(fetchGame, refreshInterval);
+
+    const ms = visible
+      ? data?.game?.status === "complete"
+        ? POLLING_INTERVALS.COMPLETED_GAME_REFRESH_MS
+        : POLLING_INTERVALS.GAME_REFRESH_MS
+      : POLLING_INTERVALS.WHEN_TAB_HIDDEN_MS;
+
+    const interval = setInterval(fetchGame, ms);
     return () => clearInterval(interval);
-  }, [gameId, refreshInterval, fetchGame]);
+  }, [gameId, visible, data?.game?.status, fetchGame]);
 
   return { data, loading, error, refetch: fetchGame };
 }

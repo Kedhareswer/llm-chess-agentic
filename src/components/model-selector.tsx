@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import type { Model } from "@/db/schema";
-import { POLLING_INTERVALS } from "@/lib/config";
+import { useState } from "react";
+import { useLeaderboard } from "@/contexts/leaderboard-context";
 
 // Skill modes with descriptions
 export const SKILL_MODES = [
@@ -69,29 +68,9 @@ export function ModelSelector({
   onSelectMode,
   disabled 
 }: ModelSelectorProps) {
-  const [models, setModels] = useState<Model[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { models, isLoading } = useLeaderboard();
   const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
   const [isModeDropdownOpen, setIsModeDropdownOpen] = useState(false);
-
-  useEffect(() => {
-    async function fetchModels() {
-      try {
-        const res = await fetch("/api/leaderboard");
-        if (!res.ok) return;
-        const data = await res.json();
-        setModels(data.models || []);
-      } catch (err) {
-        console.error("Failed to fetch models:", err);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    fetchModels();
-    const interval = setInterval(fetchModels, POLLING_INTERVALS.LEADERBOARD_REFRESH_MS);
-    return () => clearInterval(interval);
-  }, []);
 
   const selectedModel = models.find((m) => m.id === selectedModelId);
   const selectedModeData = SKILL_MODES.find((m) => m.id === selectedMode);
@@ -133,15 +112,15 @@ export function ModelSelector({
           <div className="relative">
             <button
               type="button"
-              onClick={() => !disabled && !loading && setIsModelDropdownOpen(!isModelDropdownOpen)}
-              disabled={disabled || loading}
+              onClick={() => !disabled && !isLoading && setIsModelDropdownOpen(!isModelDropdownOpen)}
+              disabled={disabled || isLoading}
               className={`
                 w-full px-4 py-3 text-left border rounded-lg transition-all
                 ${disabled ? "opacity-50 cursor-not-allowed bg-gray-50" : "hover:border-gray-400 cursor-pointer"}
                 ${isModelDropdownOpen ? "border-gray-400 ring-2 ring-gray-200" : "border-gray-200"}
               `}
             >
-              {loading ? (
+              {isLoading ? (
                 <span className="text-gray-400 text-sm">Loading models...</span>
               ) : selectedModel ? (
                 <div className="flex items-center gap-2">

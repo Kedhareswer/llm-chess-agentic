@@ -5,6 +5,7 @@ import { GameCard } from "./game-card";
 import type { Game, Model } from "@/db/schema";
 import { formatElapsed } from "@/lib/utils";
 import { useDebouncedCallback } from "@/hooks/use-debounced-callback";
+import { usePageVisibility } from "@/hooks/use-page-visibility";
 import { POLLING_INTERVALS } from "@/lib/config";
 
 type GameWithModels = Game & {
@@ -13,6 +14,7 @@ type GameWithModels = Game & {
 };
 
 export function GameGrid() {
+  const visible = usePageVisibility();
   const [games, setGames] = useState<GameWithModels[]>([]);
   const [previousGames, setPreviousGames] = useState<GameWithModels[]>([]);
   const [destroying, setDestroying] = useState(false);
@@ -114,18 +116,23 @@ export function GameGrid() {
     }
   }, 1000); // 1 second debounce
 
+  const listInterval = visible
+    ? POLLING_INTERVALS.GAMES_LIST_REFRESH_MS
+    : POLLING_INTERVALS.WHEN_TAB_HIDDEN_MS;
+
   useEffect(() => {
     fetchGames();
     fetchPreviousGames();
     const interval = setInterval(() => {
       fetchGames();
       fetchPreviousGames();
-    }, POLLING_INTERVALS.GAME_REFRESH_MS);
+    }, listInterval);
     return () => clearInterval(interval);
-  }, []);
+  }, [listInterval]);
 
-  // Automatic tick heartbeat - use configured interval
+  // Automatic tick heartbeat only when tab is visible; refetch immediately after tick so the board updates with no lag
   useEffect(() => {
+    if (!visible) return;
     const tickInterval = setInterval(async () => {
       try {
         const res = await fetch("/api/games?status=active");
@@ -133,13 +140,15 @@ export function GameGrid() {
         const data = await res.json();
         if ((data.games || []).length === 0) return;
         await fetch("/api/cron/tick");
+        await fetchGames();
+        await fetchPreviousGames();
       } catch {
         // Silently ignore tick errors
       }
     }, POLLING_INTERVALS.AUTO_TICK_MS);
 
     return () => clearInterval(tickInterval);
-  }, []);
+  }, [visible, fetchGames, fetchPreviousGames]);
 
   // Keep elapsed timer in sync with the current game's start time without recreating each second
   const startedAt = games[0]?.startedAt;

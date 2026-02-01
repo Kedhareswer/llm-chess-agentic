@@ -9,7 +9,11 @@ import { STARTING_FEN } from "@/lib/chess";
 import { formatElapsed } from "@/lib/utils";
 import { useDebouncedCallback } from "@/hooks/use-debounced-callback";
 import { POLLING_INTERVALS } from "@/lib/config";
+import { usePageVisibility } from "@/hooks/use-page-visibility";
 import { useSettings } from "@/contexts/settings-context";
+import { useLeaderboard } from "@/contexts/leaderboard-context";
+import { useChessSounds } from "@/hooks/use-chess-sounds";
+import { Chess } from "chess.js";
 import type { Game, Move, Model } from "@/db/schema";
 
 type GameState = "setup" | "active" | "finished";
@@ -23,7 +27,8 @@ interface GameData {
 
 export default function Home() {
   const { openSettings } = useSettings();
-  
+  const visible = usePageVisibility();
+
   // Game state
   const [gameState, setGameState] = useState<GameState>("setup");
   const [whiteModelId, setWhiteModelId] = useState<string | null>(null);
@@ -32,7 +37,8 @@ export default function Home() {
   const [blackMode, setBlackMode] = useState<SkillMode>("scholar");
   const [activeGameId, setActiveGameId] = useState<string | null>(null);
   const [gameData, setGameData] = useState<GameData | null>(null);
-  const [models, setModels] = useState<Model[]>([]);
+  const { models } = useLeaderboard();
+  const { sounds } = useChessSounds();
 
   // UI state
   const [starting, setStarting] = useState(false);
@@ -41,23 +47,9 @@ export default function Home() {
   const [tickInfo, setTickInfo] = useState<string | null>(null);
   const [selectedMoveId, setSelectedMoveId] = useState<string | null>(null);
   const [viewPosition, setViewPosition] = useState<string | null>(null);
-
-  // Fetch models list
-  useEffect(() => {
-    async function fetchModels() {
-      try {
-        const res = await fetch("/api/leaderboard");
-        if (!res.ok) return;
-        const data = await res.json();
-        setModels(data.models || []);
-      } catch {
-        // Ignore errors
-      }
-    }
-    fetchModels();
-    const interval = setInterval(fetchModels, POLLING_INTERVALS.LEADERBOARD_REFRESH_MS);
-    return () => clearInterval(interval);
-  }, []);
+  const [previousFen, setPreviousFen] = useState<string | null>(null);
+  const [previousMoveCount, setPreviousMoveCount] = useState<number>(0);
+  const [isAnimating, setIsAnimating] = useState(false);
 
   // Check for existing active game on mount
   useEffect(() => {
@@ -96,28 +88,34 @@ export default function Home() {
     }
   }, [activeGameId]);
 
-  // Poll for game updates
+  // Poll for game updates (slower when tab hidden or game complete)
   useEffect(() => {
     if (!activeGameId) return;
     fetchGameData();
-    const interval = setInterval(fetchGameData, POLLING_INTERVALS.GAME_REFRESH_MS);
+    const ms = visible
+      ? gameData?.game?.status === "complete"
+        ? POLLING_INTERVALS.COMPLETED_GAME_REFRESH_MS
+        : POLLING_INTERVALS.GAME_REFRESH_MS
+      : POLLING_INTERVALS.WHEN_TAB_HIDDEN_MS;
+    const interval = setInterval(fetchGameData, ms);
     return () => clearInterval(interval);
-  }, [activeGameId, fetchGameData]);
+  }, [activeGameId, fetchGameData, visible, gameData?.game?.status]);
 
-  // Auto-tick for active games
+  // Auto-tick for active games; refetch game data immediately after tick so the board updates with no lag
   useEffect(() => {
     if (gameState !== "active" || !activeGameId) return;
 
     const tickInterval = setInterval(async () => {
       try {
         await fetch("/api/cron/tick");
+        await fetchGameData();
       } catch {
         // Silently ignore tick errors
       }
     }, POLLING_INTERVALS.AUTO_TICK_MS);
 
     return () => clearInterval(tickInterval);
-  }, [gameState, activeGameId]);
+  }, [gameState, activeGameId, fetchGameData]);
 
   // Elapsed timer
   useEffect(() => {
@@ -273,6 +271,76 @@ export default function Home() {
   // Determine board position and turn
   const boardPosition = viewPosition || gameData?.game?.fen || STARTING_FEN;
   const isWhiteTurn = boardPosition.split(" ")[1] === "w";
+
+  // Track FEN changes to trigger animations and sounds
+  useEffect(() => {
+    const currentFen = gameData?.game?.fen;
+    const currentMoveCount = gameData?.moves?.length || 0;
+    
+    // Only play sounds when:
+    // 1. We're viewing the current position (not historical)
+    // 2. A new move was actually added (move count increased)
+    // 3. FEN changed
+    const isNewMove = currentMoveCount > previousMoveCount;
+    const isCurrentPosition = !viewPosition;
+    const fenChanged = currentFen && previousFen && currentFen !== previousFen;
+    
+    if (fenChanged && isCurrentPosition) {
+      setIsAnimating(true);
+      const timer = setTimeout(() => setIsAnimating(false), 350);
+      
+      // Only play sound if a new move was actually applied
+      if (isNewMove && sounds && gameData?.moves) {
+        try {
+          const chess = new Chess(previousFen);
+          const latestMove = gameData.moves[gameData.moves.length - 1];
+          
+          if (latestMove) {
+            const moveSan = latestMove.moveSan;
+            const chessAfter = new Chess(currentFen);
+            
+            // Check for checkmate first
+            if (chessAfter.isCheckmate()) {
+              sounds.playCheckmate();
+            }
+            // Check for check
+            else if (chessAfter.isCheck()) {
+              sounds.playCheck();
+            }
+            // Check for capture (contains 'x' in SAN)
+            else if (moveSan.includes('x')) {
+              sounds.playCapture();
+            }
+            // Check for castling
+            else if (moveSan === 'O-O' || moveSan === 'O-O-O') {
+              sounds.playCastle();
+            }
+            // Check for promotion (contains '=')
+            else if (moveSan.includes('=')) {
+              sounds.playPromotion();
+            }
+            // Regular move
+            else {
+              sounds.playMove();
+            }
+          }
+        } catch (error) {
+          // Fallback to regular move sound if analysis fails
+          sounds.playMove();
+        }
+      }
+      
+      return () => clearTimeout(timer);
+    }
+    
+    // Update previous state
+    if (currentFen) {
+      setPreviousFen(currentFen);
+    }
+    if (currentMoveCount !== undefined) {
+      setPreviousMoveCount(currentMoveCount);
+    }
+  }, [gameData?.game?.fen, gameData?.moves?.length, previousFen, previousMoveCount, viewPosition, sounds]);
   const isActive = gameState === "active";
 
   // Clear error when both models are selected (but not API key errors)
@@ -465,12 +533,12 @@ export default function Home() {
                 <div className="h-full max-h-[600px]">
                   <EvalBar fen={boardPosition} />
                 </div>
-                <div className="aspect-square h-full max-h-[600px]">
+                <div className={`aspect-square h-full max-h-[600px] ${isAnimating ? 'chessboard-animating' : ''}`}>
                   <Chessboard
-                    key={boardPosition}
                     options={{
                       position: boardPosition,
                       allowDragging: false,
+                      animationDurationInMs: 300,
                     }}
                   />
                 </div>

@@ -16,7 +16,7 @@ export async function POST(request: Request) {
   
   const { key } = validation.data;
 
-  setGeminiApiKey(key);
+  await setGeminiApiKey(key);
 
   return NextResponse.json({ success: true });
 }

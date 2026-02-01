@@ -5,6 +5,7 @@ import { Header } from "./header";
 import { NavDrawer } from "./nav-drawer";
 import { SettingsModal } from "./settings-modal";
 import { SettingsProvider } from "@/contexts/settings-context";
+import { LeaderboardProvider } from "@/contexts/leaderboard-context";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -18,12 +19,13 @@ export function AppShell({ children }: AppShellProps) {
 
   return (
     <SettingsProvider openSettings={openSettings}>
+      <LeaderboardProvider>
       <div className="flex h-screen flex-col">
         <Header 
           onMenuClick={() => setIsDrawerOpen(true)} 
           onSettingsClick={openSettings}
         />
-        <main className="flex-1 overflow-hidden">{children}</main>
+        <main className="flex-1 min-h-0 overflow-y-auto">{children}</main>
       </div>
 
       {/* Navigation Drawer */}
@@ -38,6 +40,7 @@ export function AppShell({ children }: AppShellProps) {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
       />
+      </LeaderboardProvider>
     </SettingsProvider>
   );
 }

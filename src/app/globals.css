@@ -186,3 +186,33 @@ body {
 .animate-confetti {
   animation: confetti-fall 1.5s ease-out forwards;
 }
+
+/* Chess piece movement animations */
+/* Target react-chessboard pieces - use more specific selectors */
+div[data-testid*="chessboard"] img,
+div[data-testid*="chessboard"] svg,
+div[class*="react-chessboard"] img,
+div[class*="react-chessboard"] svg {
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  will-change: transform;
+}
+
+/* Smooth piece movement for all chess pieces */
+div[class*="square"] img,
+div[class*="square"] svg,
+div[data-square] img,
+div[data-square] svg {
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  will-change: transform;
+}
+
+/* Ensure the board container doesn't interfere */
+div[class*="react-chessboard"] {
+  transition: none;
+}
+
+/* Enhanced animations when board is updating */
+.chessboard-animating div[class*="square"] img,
+.chessboard-animating div[class*="square"] svg {
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}

@@ -48,6 +48,13 @@ This file provides guidance to agents when working with code in this repository.
 - Environment variables: `DATABASE_URL`, `GROQ_API_KEY`, `GEMINI_API_KEY`, `AI_GATEWAY_API_KEY`
 - Drizzle config reads from `.env.local` (not standard `.env`)
 
+## Polling and API Usage (Vercel-Optimized)
+
+- **Leaderboard**: No automatic polling. Fetches once on load; refetches when tab becomes visible (throttled 60s) and when user clicks the header refresh button.
+- **Game data**: `GAME_REFRESH_MS` (5s) when tab visible and game active; `COMPLETED_GAME_REFRESH_MS` (60s) when game is complete; `WHEN_TAB_HIDDEN_MS` (30s) when tab hidden. See `usePageVisibility()` and `POLLING_INTERVALS` in `src/lib/config.ts`.
+- **Games list** (e.g. `/games`, GameGrid): `GAMES_LIST_REFRESH_MS` (15s) when visible; 30s when hidden. Manual "Refresh" buttons on header (leaderboard) and Game History page.
+- Auto-tick runs only when tab is visible (`AUTO_TICK_MS` 8s).
+
 ## Non-Obvious Implementation Details
 
 - AI responses are parsed with multiple fallback strategies in `parseAIResponse()`

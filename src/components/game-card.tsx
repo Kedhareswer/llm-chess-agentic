@@ -50,6 +50,7 @@ export function GameCard({ game }: GameCardProps) {
               position: game.fen,
               allowDragging: false,
               boardStyle: { borderRadius: "0" },
+              animationDurationInMs: 300,
             }}
           />
         </div>

@@ -34,7 +34,7 @@ export default function GamesPage() {
 
   useEffect(() => {
     fetchGames();
-    const interval = setInterval(fetchGames, POLLING_INTERVALS.GAME_REFRESH_MS);
+    const interval = setInterval(fetchGames, POLLING_INTERVALS.GAMES_LIST_REFRESH_MS);
     return () => clearInterval(interval);
   }, [fetchGames]);
 
@@ -49,12 +49,22 @@ export default function GamesPage() {
               Browse all completed games
             </p>
           </div>
-          <Link
-            href="/"
-            className="px-4 py-2 bg-black text-white text-sm font-semibold rounded-lg hover:bg-gray-800 transition-colors"
-          >
-            New Game
-          </Link>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => fetchGames()}
+              disabled={loading}
+              className="px-4 py-2 border border-gray-300 bg-white text-gray-700 text-sm font-semibold rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
+            >
+              Refresh
+            </button>
+            <Link
+              href="/"
+              className="px-4 py-2 bg-black text-white text-sm font-semibold rounded-lg hover:bg-gray-800 transition-colors"
+            >
+              New Game
+            </Link>
+          </div>
         </div>
 
         {/* Loading */}
