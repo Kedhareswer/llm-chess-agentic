@@ -32,3 +32,9 @@ Ensure each tick processes exactly one side’s move (white -> black -> white ..
 - White then black strictly alternate; no stuck “Thinking…” state.
 - Elapsed timer visible and increments.
 - Two consecutive timeouts for a side lead to forfeit within ~20s (10s each turn).
+
+---
+
+## Status note (2026-07-18)
+
+**Largely shipped:** FEN-based turn selection, two-strike timeout forfeit, match elapsed timer. The “exactly one ply per tick” assumption was later changed — a tick now plays multiple plies until `TICK_BUDGET_MS` (25s) is spent. Per-move wall-clock is provider `AI_TIMEOUTS`, not a hard global 10s.

@@ -181,3 +181,9 @@ According to the task list, the next tasks are:
 - The tests mock `processGame()` to avoid actual AI calls during testing
 - The transaction approach is standard PostgreSQL best practice for preventing race conditions
 - This fix is critical (P0 priority) as it prevents data corruption from concurrent requests
+
+---
+
+## Status note (2026-07-18)
+
+Summary above describes the `FOR UPDATE` approach as implemented at the time. Current `POST /api/games/start` uses a transaction with `pg_advisory_xact_lock(12345)` (not the `FOR UPDATE` snippet shown). Later additions: `whiteMode`/`blackMode` on start (migration `0008`). Narrative preserved as a point-in-time record.

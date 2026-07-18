@@ -7,19 +7,21 @@ A prioritized plan for contributing to LLM Chess Arena. Two parts:
 
 Each item lists the value, the approach, and the files to touch. Effort: **S** (hours), **M** (a day or two), **L** (multi-day).
 
-## Status (branch `feat/fixes-and-features`)
+## Status (as of 2026-07-18 on `main`)
 
-Landed and verified (`pnpm typecheck` + `pnpm test` = 121 passing + `pnpm build` all green):
+Landed on main (narratives below preserve original problem statements; checkmarks reflect current code):
 
-- ✅ **F1** game-over detection (`loadPgn` + fallback) with 6 new termination tests
+- ✅ **F1** game-over detection (`loadPgn` + fallback) with termination tests
 - ✅ **F2** recent-moves ordering (recency desc + reverse)
 - ✅ **F3** serverless-safe processing claim (atomic `UPDATE … RETURNING` + migration `0006`)
-- ✅ **F4** auth: `requireAdmin` on reset/key-setters, `requireCron` on tick, tick null-guard + atomic `tickCount`
-- ✅ **F5** at-rest encryption for keys (`crypto.ts`, opt-in via `ENCRYPTION_KEY`) + removed leaky module cache
+- ⚠️ **F4** auth: `requireAdmin` on reset/key-setters ✅; tick null-guard + atomic `tickCount` ✅; **`requireCron` on tick was reverted / left unused** — tick, `games/start`, and `games/destroy` are intentionally ungated for browser-driven play (`f4fdd9b`)
+- ✅ **F5** at-rest encryption for keys (`crypto.ts`, opt-in via `ENCRYPTION_KEY`) + removed leaky module cache; settings UI accepts admin bearer token
 - ✅ **F6** input validation (status enum on list routes, self-play rejected at schema)
-- ✅ **V1** Anthropic + direct OpenAI provider adapters + seeded models
+- ✅ **V1** Anthropic + direct OpenAI provider adapters + seeded models (July 2026 lineup in `seed.ts`)
+- ✅ **V2** post-game Stockfish analysis (`6afe9b0`, migration `0007`): `eval_cp` / `cp_loss` / `move_accuracy` + `games.analyzed`; client POST; ACPL/blunder via `/api/analytics/accuracy`. As-built differs from the approach bullets below (no `annotation` / `thinkMs` / before-after pair — annotations remain **V4**)
+- ✅ **Skill modes + engine scorer** (`bf37d86`, migration `0008`): `modes.ts` + depth-2 `engine.ts` + `white_mode`/`black_mode` (not originally a V-item)
 - ✅ **CI** GitHub Actions (typecheck/test/build gating; lint non-blocking) + Vitest/e2e split
-- ⏳ **V2–V9** not started (see below); **F5** UI for admin auth is follow-up.
+- ⏳ **V3–V9** not started (see below)
 
 ---
 
@@ -85,6 +87,8 @@ Ordered by value-to-the-mission. The first three turn a bundled-but-wasted engin
 
 **Files:** `src/db/schema.ts`, `src/lib/analysis.ts` (new), `src/lib/game-processor.ts`, `src/hooks/use-stockfish.ts`, `src/app/api/analytics/accuracy/route.ts` (new), `src/components/leaderboard.tsx`
 
+> Status (2026-07-18): **Shipped** (`6afe9b0`, migration `0007`) with as-built columns `eval_cp` / `cp_loss` / `move_accuracy` + `games.analyzed` (client POST). No `annotation` / `thinkMs` — those remain V4 / V3 territory.
+
 ### V3 — Per-move token usage, latency & cost tracking *(M, high)*
 **Value:** adds benchmark dimensions ELO can't capture: **cost-per-win**, **tokens-per-move**, **time-per-move**. Directly answers "is the expensive model worth it?" — the question people actually run these comparisons to answer. The AI SDK already returns `usage`; the code discards it.
 
@@ -136,9 +140,10 @@ Ordered by value-to-the-mission. The first three turn a bundled-but-wasted engin
 
 ## Suggested sequence
 
-1. **F1 + tests** — restore correct game termination (everything downstream depends on it).
-2. **CI** (GitHub Actions: lint + `tsc --noEmit` + `pnpm test` + build) so fixes stay protected.
-3. **F3, F4** — the two structural/security holes.
-4. **V1** — unlock the multi-provider roster.
-5. **V2 → V4** — the benchmark analytics stack (eval → cost → annotations).
+1. ~~**F1 + tests**~~ — done.
+2. ~~**CI**~~ — done.
+3. ~~**F3**~~ done; **F4** partially done (admin on reset/keys; tick left open by design — decide whether to re-gate start/destroy).
+4. ~~**V1**~~ — done.
+5. ~~**V2**~~ done → **V3 → V4** — cost tracking, then move-quality annotations.
 6. **V6 → V8** — automation, ratings, realtime.
+7. **V9** — responsive board + a11y.

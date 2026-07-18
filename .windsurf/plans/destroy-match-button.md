@@ -15,3 +15,9 @@ Add a user-facing "Destroy match" control that immediately deletes the current a
 - Only one active game is supported; endpoint assumes single active record.
 - No DB migration needed; pure API + UI changes.
 - Ensure no ELO or result updates occur on destroy.
+
+---
+
+## Status note (2026-07-18)
+
+**Shipped with a behavior change.** `POST /api/games/destroy` **archives** the active game (`status=complete`, `resultReason=Match manually destroyed`) rather than hard-deleting the game/moves. Still no ELO update. Endpoint is **ungated** (no `requireAdmin`).

@@ -47,3 +47,9 @@ Implement a match elapsed timer, enforce a 10-second per-move server-side deadli
   - records a fallback move (if selected), or
   - ends via forfeit (if selected).
 - No more indefinite “Thinking…” with zero moves after a tick.
+
+---
+
+## Status note (2026-07-18)
+
+**Superseded** as a global 10s move deadline. Live behavior uses provider-specific `AI_TIMEOUTS` (Groq 7s / Gemini 30s / Anthropic 20s / OpenAI 20s / Gateway 8s) plus a **two-warning then forfeit** policy (`MAX_TIMEOUT_WARNINGS`). Multi-ply ticks use `TICK_BUDGET_MS` (25s). Gemini save-button / elapsed-timer UI goals from this plan are treated as landed separately.

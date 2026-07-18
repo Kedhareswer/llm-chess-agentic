@@ -860,3 +860,9 @@ If issues arise:
    - All magic numbers documented
    - Shared utilities extracted
    - Consistent naming conventions
+
+---
+
+## Status note (2026-07-18)
+
+Point-in-time design for the cleanup effort — narrative above is preserved. Subsequent work landed typed errors as designed; Gemini timeout is now **30s** in `AI_TIMEOUTS` (design snippets that show 15s are historical). Later features (multi-provider adapters, DB processing claim, skill modes, post-game analysis) are outside this cleanup design — see `docs/ROADMAP.md` and living docs.

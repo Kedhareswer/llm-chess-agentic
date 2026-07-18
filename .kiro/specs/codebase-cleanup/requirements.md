@@ -428,3 +428,9 @@ const gamesWithModels = await Promise.all(
 - Major architectural changes
 - Adding new features beyond cleanup
 - Performance optimization beyond obvious issues
+
+---
+
+## Status note (2026-07-18)
+
+Point-in-time requirements — narrative above is preserved. Findings that referenced an in-memory `processingGames` Set/Map for concurrency are **obsolete**: processing now uses an atomic DB claim on `games.processing` / `games.processingStartedAt` (migration `0006` / roadmap F3). Gemini timeout references of 15s are historical; live value is 30s. Cleanup checklist items were largely completed; later feature work is tracked in `docs/ROADMAP.md`.

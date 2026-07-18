@@ -235,3 +235,9 @@
   - [ ] 18.4.2 Test error scenarios
   - [ ] 18.4.3 Test concurrent operations
   - [ ] 18.4.4 Test on production-like environment
+
+---
+
+## Status note (2026-07-18)
+
+Cleanup task checklist above is a historical record (most Phase 1–2 items marked done). Task 11.1.1’s `GEMINI_TIMEOUT_MS=15000` reflects the value at the time of writing; live `AI_TIMEOUTS.GEMINI_MS` is **30_000**. Subsequent work (providers, analysis, skill modes, tick budget) is outside this spec — see `docs/ROADMAP.md`.
