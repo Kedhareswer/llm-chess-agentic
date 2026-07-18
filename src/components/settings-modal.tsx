@@ -15,7 +15,18 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [geminiSaving, setGeminiSaving] = useState(false);
   const [groqMessage, setGroqMessage] = useState<{ text: string; isError: boolean } | null>(null);
   const [geminiMessage, setGeminiMessage] = useState<{ text: string; isError: boolean } | null>(null);
+  const [adminToken, setAdminToken] = useState("");
   const modalRef = useRef<HTMLDivElement>(null);
+
+  // Admin token is required by the key-update endpoints when ADMIN_TOKEN is set
+  // on the server. Kept in localStorage so it survives reloads.
+  useEffect(() => {
+    setAdminToken(localStorage.getItem("adminToken") || "");
+  }, []);
+
+  function authHeaders(): Record<string, string> {
+    return adminToken ? { Authorization: `Bearer ${adminToken}` } : {};
+  }
   
   const { getSettings, updateSettings, sounds } = useChessSounds();
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -68,7 +79,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     try {
       const res = await fetch("/api/tournament/groq-key", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ key: groqKey }),
       });
       if (!res.ok) {
@@ -91,7 +102,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     try {
       const res = await fetch("/api/tournament/gemini-key", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ key: geminiKey }),
       });
       if (!res.ok) {
@@ -221,6 +232,24 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               >
                 aistudio.google.com
               </a>
+            </p>
+          </div>
+
+          {/* Admin Token */}
+          <div className="space-y-3">
+            <label className="text-sm font-semibold text-gray-700">Admin Token</label>
+            <input
+              type="password"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gray-500 focus:border-transparent"
+              value={adminToken}
+              onChange={(e) => {
+                setAdminToken(e.target.value);
+                localStorage.setItem("adminToken", e.target.value);
+              }}
+              placeholder="Only needed if the server sets ADMIN_TOKEN"
+            />
+            <p className="text-xs text-gray-500">
+              Sent with key updates when the deployment requires admin auth.
             </p>
           </div>
 

@@ -62,6 +62,23 @@ export const tournament = pgTable("tournament", {
   geminiApiKey: text("gemini_api_key"), // Global API key for Gemini models
 });
 
+// Game columns safe to return to clients — excludes per-game API keys and the
+// internal processing claim.
+export const publicGameColumns = {
+  id: games.id,
+  whiteId: games.whiteId,
+  blackId: games.blackId,
+  pgn: games.pgn,
+  fen: games.fen,
+  status: games.status,
+  result: games.result,
+  resultReason: games.resultReason,
+  startedAt: games.startedAt,
+  endedAt: games.endedAt,
+  whiteTimeoutWarnings: games.whiteTimeoutWarnings,
+  blackTimeoutWarnings: games.blackTimeoutWarnings,
+};
+
 export type Model = typeof models.$inferSelect;
 export type Game = typeof games.$inferSelect;
 export type Move = typeof moves.$inferSelect;

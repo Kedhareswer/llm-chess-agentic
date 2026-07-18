@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
-import { games, moves, models } from "@/db/schema";
+import { games, moves, models, publicGameColumns } from "@/db/schema";
 import { eq, asc } from "drizzle-orm";
 
 export async function GET(
@@ -10,7 +10,7 @@ export async function GET(
   const { id } = await params;
 
   const [game] = await db
-    .select()
+    .select(publicGameColumns)
     .from(games)
     .where(eq(games.id, id));
 

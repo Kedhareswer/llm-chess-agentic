@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { timingSafeEqual } from "crypto";
 
-/** Constant-time string comparison that is safe against length leaks. */
+/** Constant-time comparison of equal-length inputs; length itself is not secret. */
 function safeEqual(a: string, b: string): boolean {
   const bufA = Buffer.from(a);
   const bufB = Buffer.from(b);

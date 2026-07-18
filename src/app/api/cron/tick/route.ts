@@ -3,12 +3,12 @@ import { db } from "@/db";
 import { tournament, games } from "@/db/schema";
 import { eq, sql } from "drizzle-orm";
 import { processGame } from "@/lib/game-processor";
-import { requireCron } from "@/lib/auth";
 
 async function handleTick(request: Request) {
-  // Gate the tick behind CRON_SECRET (Vercel Cron sends it automatically).
-  const denied = requireCron(request);
-  if (denied) return denied;
+  // NOTE: intentionally unauthenticated. There is no server cron (vercel.json is
+  // empty) — the browser UI is the only tick driver, so gating this behind
+  // CRON_SECRET would freeze all games. Ticks are safe to expose: they only
+  // advance already-active games and are serialized by the DB processing claim.
 
   // Check if tournament is running
   const [state] = await db.select().from(tournament).where(eq(tournament.id, 1));

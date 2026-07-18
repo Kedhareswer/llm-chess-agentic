@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
-import { games, models } from "@/db/schema";
+import { games, models, publicGameColumns } from "@/db/schema";
 import { eq, desc, inArray } from "drizzle-orm";
 import { GameStatusSchema } from "@/types/api";
 
@@ -27,7 +27,7 @@ export async function GET(request: Request) {
   try {
     // Fetch games
     const gamesList = await db
-      .select()
+      .select(publicGameColumns)
       .from(games)
       .where(eq(games.status, statusParsed.data))
       .orderBy(desc(games.startedAt))
