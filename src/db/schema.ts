@@ -37,6 +37,9 @@ export const games = pgTable("games", {
   // processes it, preventing overlapping ticks / instances from double-moving.
   processing: boolean("processing").notNull().default(false),
   processingStartedAt: timestamp("processing_started_at"),
+  // Set true once post-game Stockfish analysis (per-move eval/cpLoss/accuracy)
+  // has been computed and stored, so it is only done once per game.
+  analyzed: boolean("analyzed").notNull().default(false),
 });
 
 export const moves = pgTable("moves", {
@@ -49,6 +52,13 @@ export const moves = pgTable("moves", {
   fenAfter: text("fen_after").notNull(),
   reasoning: text("reasoning").notNull(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+  // Post-game Stockfish analysis (nullable until the game is analyzed):
+  // evalCp   - engine eval of fenAfter, white's perspective, in centipawns
+  // cpLoss   - centipawns lost by this move vs. holding the prior eval (>= 0)
+  // moveAccuracy - per-move accuracy 0-100 (Lichess-style win%-based)
+  evalCp: integer("eval_cp"),
+  cpLoss: integer("cp_loss"),
+  moveAccuracy: integer("move_accuracy"),
 });
 
 export const tournament = pgTable("tournament", {

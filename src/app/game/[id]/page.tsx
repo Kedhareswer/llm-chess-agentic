@@ -10,6 +10,7 @@ import { formatElapsed } from "@/lib/utils";
 import { useDebouncedCallback } from "@/hooks/use-debounced-callback";
 import { useGameData } from "@/hooks/use-game-data";
 import { useChessSounds } from "@/hooks/use-chess-sounds";
+import { useGameAnalysis } from "@/hooks/use-game-analysis";
 import { Chess } from "chess.js";
 
 interface GameData {
@@ -33,6 +34,10 @@ export default function GamePage() {
   
   const { data, loading, error, refetch } = useGameData(gameId);
   const { sounds } = useChessSounds();
+
+  // Post-game Stockfish analysis: runs once in the browser for a completed,
+  // not-yet-analyzed game, then refetches so persisted stats appear.
+  const analysisProgress = useGameAnalysis(data?.game, data?.moves, refetch);
 
   // Track FEN changes to trigger animations and sounds
   useEffect(() => {
@@ -226,6 +231,12 @@ export default function GamePage() {
       {tickInfo && (
         <div className="mb-4 p-2 text-xs border-2 border-black bg-blue-50 text-center" data-testid="detail-tick-info">
           {tickInfo}
+        </div>
+      )}
+
+      {analysisProgress && (
+        <div className="mb-4 p-2 text-xs border-2 border-black bg-purple-50 text-center" data-testid="analysis-progress">
+          Analyzing game with Stockfish… {analysisProgress.done}/{analysisProgress.total} positions
         </div>
       )}
 

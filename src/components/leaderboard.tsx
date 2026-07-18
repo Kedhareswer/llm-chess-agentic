@@ -31,6 +31,28 @@ export function Leaderboard() {
   const previousRanksRef = useRef<Map<string, number>>(new Map());
   const [reorderedIds, setReorderedIds] = useState<Set<string>>(new Set());
 
+  // Per-model accuracy stats from post-game analysis (ACPL / accuracy / blunder rate).
+  interface AccuracyStat { accuracy: number; acpl: number; blunderRate: number; moveCount: number }
+  const [accuracyStats, setAccuracyStats] = useState<Record<string, AccuracyStat>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/analytics/accuracy")
+      .then((r) => (r.ok ? r.json() : { models: [] }))
+      .then((d: { models?: Array<AccuracyStat & { modelId: string }> }) => {
+        if (cancelled) return;
+        const map: Record<string, AccuracyStat> = {};
+        (d.models || []).forEach((m) => {
+          map[m.modelId] = { accuracy: m.accuracy, acpl: m.acpl, blunderRate: m.blunderRate, moveCount: m.moveCount };
+        });
+        setAccuracyStats(map);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [models]);
+
   // Detect ELO and rank changes when context models update
   useEffect(() => {
     if (models.length === 0) return;
@@ -260,6 +282,14 @@ export function Leaderboard() {
                       W{model.wins}/L{model.losses}/D{model.draws}
                     </span>
                   </div>
+                  {accuracyStats[model.id] && accuracyStats[model.id].moveCount > 0 && (
+                    <span
+                      className="text-[11px] text-blue-700"
+                      title={`${accuracyStats[model.id].moveCount} analyzed moves`}
+                    >
+                      Acc {accuracyStats[model.id].accuracy}% · ACPL {accuracyStats[model.id].acpl} · Blund {accuracyStats[model.id].blunderRate}%
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
