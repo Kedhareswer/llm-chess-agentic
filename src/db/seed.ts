@@ -8,34 +8,31 @@ config({ path: ".env.local" });
 const sql = postgres(process.env.DATABASE_URL!);
 const db = drizzle(sql);
 
-// Model IDs: only working Groq + Gemini
+// Model IDs — current lineups as of July 2026.
+// Groq: llama-3.x and Kimi K2 are deprecated on GroqCloud; gpt-oss and qwen3.6
+// are the current chat models. Gemini: 3.x is current (3.5 Flash is GA);
+// 2.5 kept as legacy opponents.
 const MODELS = [
-  // Groq (working)
-  { id: "groq/llama-3.3-70b-versatile", name: "Llama 3.3 70B Versatile", provider: "groq", active: true },
-  { id: "groq/llama-3.1-8b-instant", name: "Llama 3.1 8B Instant", provider: "groq", active: true },
-  { id: "groq/moonshotai/kimi-k2-instruct", name: "Kimi K2 Instruct", provider: "groq", active: true },
-  { id: "groq/moonshotai/kimi-k2-instruct-0905", name: "Kimi K2 Instruct 0905", provider: "groq", active: true },
-  { id: "groq/openai/gpt-oss-20b", name: "GPT-OSS 20B", provider: "groq", active: true },
+  // Groq (need GROQ_API_KEY)
   { id: "groq/openai/gpt-oss-120b", name: "GPT-OSS 120B", provider: "groq", active: true },
-  { id: "groq/openai/gpt-oss-safeguard-20b", name: "GPT-OSS Safeguard 20B", provider: "groq", active: true },
-  { id: "groq/meta-llama/llama-4-scout-17b-16e-instruct", name: "Llama 4 Scout 17B", provider: "groq", active: true },
-  { id: "groq/meta-llama/llama-4-maverick-17b-128e-instruct", name: "Llama 4 Maverick 17B", provider: "groq", active: true },
+  { id: "groq/openai/gpt-oss-20b", name: "GPT-OSS 20B", provider: "groq", active: true },
+  { id: "groq/qwen/qwen3.6-27b", name: "Qwen 3.6 27B", provider: "groq", active: true },
 
-  // Gemini (working with 20s timeout)
-  { id: "google/models/gemini-2.5-pro", name: "Gemini 2.5 Pro", provider: "google", active: true },
+  // Gemini (need GEMINI_API_KEY)
+  { id: "google/models/gemini-3.5-flash", name: "Gemini 3.5 Flash", provider: "google", active: true },
+  { id: "google/models/gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview", provider: "google", active: true },
+  { id: "google/models/gemini-3.1-flash-lite", name: "Gemini 3.1 Flash Lite", provider: "google", active: true },
+  { id: "google/models/gemini-3-flash-preview", name: "Gemini 3 Flash Preview", provider: "google", active: true },
   { id: "google/models/gemini-2.5-flash", name: "Gemini 2.5 Flash", provider: "google", active: true },
-  { id: "google/models/gemini-2.0-flash", name: "Gemini 2.0 Flash", provider: "google", active: true },
-  { id: "google/models/gemini-2.0-flash-001", name: "Gemini 2.0 Flash 001", provider: "google", active: true },
-  { id: "google/models/gemini-2.0-flash-lite", name: "Gemini 2.0 Flash Lite", provider: "google", active: true },
-  { id: "google/models/gemini-2.0-flash-lite-001", name: "Gemini 2.0 Flash Lite 001", provider: "google", active: true },
+  { id: "google/models/gemini-2.5-pro", name: "Gemini 2.5 Pro", provider: "google", active: true },
 
   // Anthropic (Claude) — inactive by default; enable after setting ANTHROPIC_API_KEY.
-  { id: "anthropic/claude-sonnet-4-5", name: "Claude Sonnet 4.5", provider: "anthropic", active: false },
-  { id: "anthropic/claude-3-5-haiku-latest", name: "Claude 3.5 Haiku", provider: "anthropic", active: false },
+  { id: "anthropic/claude-sonnet-5", name: "Claude Sonnet 5", provider: "anthropic", active: false },
+  { id: "anthropic/claude-haiku-4-5", name: "Claude Haiku 4.5", provider: "anthropic", active: false },
 
   // OpenAI (direct) — inactive by default; enable after setting OPENAI_API_KEY.
-  { id: "openai/gpt-4o", name: "GPT-4o", provider: "openai", active: false },
-  { id: "openai/gpt-4o-mini", name: "GPT-4o mini", provider: "openai", active: false },
+  { id: "openai/gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai", active: false },
+  { id: "openai/gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", active: false },
 ];
 
 async function seed() {

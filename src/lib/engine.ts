@@ -55,17 +55,34 @@ function negamax(chess: Chess, depth: number, alpha: number, beta: number): numb
   return best;
 }
 
+// ponytail: naive opening heuristic as a tiebreak. Material dominates (100cp a
+// pawn); this only orders otherwise-equal quiet moves so the candidate list
+// isn't arbitrary in calm positions (center > development > castling > shuffling).
+function positionalBonus(move: string, fullmove: number): number {
+  if (move === "O-O") return 30;
+  if (move === "O-O-O") return 25;
+  if (/^[ed][45]$/.test(move)) return 25; // central pawn advance
+  if (/^[NB][a-h]?[1-8]?[a-h][1-8]$/.test(move)) return 15; // minor-piece development
+  if (fullmove <= 8 && move.startsWith("Q")) return -15; // early queen sortie
+  if (move.startsWith("K")) return -10; // king walk (castling handled above)
+  return 0;
+}
+
 /**
  * Scores every legal move in the position, best first.
  * Depth 2 = my move + opponent's best material reply (~1k nodes, a few ms).
  */
 export function scoreMoves(fen: string, depth = 2): ScoredMove[] {
   const chess = new Chess(fen);
+  const fullmove = parseInt(fen.split(" ")[5], 10) || 1;
   const results: ScoredMove[] = [];
   for (const m of chess.moves()) {
     chess.move(m);
-    results.push({ move: m, score: -negamax(chess, depth - 1, -MATE_SCORE * 2, MATE_SCORE * 2) });
+    const material = -negamax(chess, depth - 1, -MATE_SCORE * 2, MATE_SCORE * 2);
     chess.undo();
+    // No tiebreak on decisive scores — a mate is a mate (and formatScore keys on MATE_SCORE).
+    const score = Math.abs(material) >= MATE_SCORE ? material : material + positionalBonus(m, fullmove);
+    results.push({ move: m, score });
   }
   return results.sort((a, b) => b.score - a.score);
 }

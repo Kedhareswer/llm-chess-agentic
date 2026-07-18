@@ -76,14 +76,20 @@ async function callGroqNonStreaming(model: string, prompt: string, apiKey: strin
 async function callGeminiNonStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number, temperature: number): Promise<string> {
   const google = createGoogleGenerativeAI({ apiKey });
 
-  // Gemini 2.5 models spend "thinking" tokens from the output budget; a tight
-  // cap starves them into empty responses (which then parse-fail and burn
-  // judge retries), so give them plenty of headroom.
+  // Gemini thinking models spend reasoning tokens from the output budget; a
+  // tight cap starves them into empty responses (which then parse-fail and
+  // burn judge retries), so give them headroom. For Gemini 3+ also cap the
+  // thinking level — a chess move needs seconds, not minutes of deliberation.
+  // (thinkingLevel is a Gemini 3 parameter; 2.x models reject it.)
+  const isGemini3Plus = /gemini-[3-9]/.test(model);
   const textPromise = generateText({
     model: google(model),
     prompt,
     temperature,
     maxOutputTokens: 4096,
+    ...(isGemini3Plus && {
+      providerOptions: { google: { thinkingConfig: { thinkingLevel: "low" as const } } },
+    }),
   }).then(result => result.text);
 
   return withTimeout(textPromise, timeoutMs, `Gemini request for ${model}`);
