@@ -82,7 +82,12 @@ describe('Game Processor Error Handling', () => {
 
     vi.mocked(db.db.update).mockReturnValue({
       set: vi.fn().mockReturnThis(),
-      where: vi.fn().mockResolvedValue([{ affected: 1 }]),
+      // `.where()` must be both awaitable (plain updates) and expose `.returning()`
+      // (the atomic processing claim), so return a thenable that also has returning.
+      where: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([{ id: 'test-game-id' }]),
+        then: (resolve: (v: unknown) => unknown) => Promise.resolve([{ affected: 1 }]).then(resolve),
+      }),
     } as any);
 
     vi.mocked(db.db.insert).mockReturnValue({
@@ -129,7 +134,12 @@ describe('Game Processor Error Handling', () => {
 
     vi.mocked(db.db.update).mockReturnValue({
       set: vi.fn().mockReturnThis(),
-      where: vi.fn().mockResolvedValue([{ affected: 1 }]),
+      // `.where()` must be both awaitable (plain updates) and expose `.returning()`
+      // (the atomic processing claim), so return a thenable that also has returning.
+      where: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([{ id: 'test-game-id' }]),
+        then: (resolve: (v: unknown) => unknown) => Promise.resolve([{ affected: 1 }]).then(resolve),
+      }),
     } as any);
 
     vi.mocked(db.db.insert).mockReturnValue({
@@ -176,7 +186,12 @@ describe('Game Processor Error Handling', () => {
 
     vi.mocked(db.db.update).mockReturnValue({
       set: vi.fn().mockReturnThis(),
-      where: vi.fn().mockResolvedValue([{ affected: 1 }]),
+      // `.where()` must be both awaitable (plain updates) and expose `.returning()`
+      // (the atomic processing claim), so return a thenable that also has returning.
+      where: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([{ id: 'test-game-id' }]),
+        then: (resolve: (v: unknown) => unknown) => Promise.resolve([{ affected: 1 }]).then(resolve),
+      }),
     } as any);
 
     vi.mocked(db.db.insert).mockReturnValue({
@@ -223,7 +238,12 @@ describe('Game Processor Error Handling', () => {
 
     vi.mocked(db.db.update).mockReturnValue({
       set: vi.fn().mockReturnThis(),
-      where: vi.fn().mockResolvedValue([{ affected: 1 }]),
+      // `.where()` must be both awaitable (plain updates) and expose `.returning()`
+      // (the atomic processing claim), so return a thenable that also has returning.
+      where: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([{ id: 'test-game-id' }]),
+        then: (resolve: (v: unknown) => unknown) => Promise.resolve([{ affected: 1 }]).then(resolve),
+      }),
     } as any);
 
     vi.mocked(db.db.insert).mockReturnValue({
@@ -240,7 +260,7 @@ describe('Game Processor Error Handling', () => {
     await expect(processGame(mockGame)).resolves.not.toThrow();
   });
 
-  it('should handle unexpected errors by rethrowing', async () => {
+  it('should not crash the tick on unexpected errors (caught and logged)', async () => {
     const mockGame: MockGame = {
       id: 'test-game-id',
       whiteId: 'model-1',
@@ -270,7 +290,12 @@ describe('Game Processor Error Handling', () => {
 
     vi.mocked(db.db.update).mockReturnValue({
       set: vi.fn().mockReturnThis(),
-      where: vi.fn().mockResolvedValue([{ affected: 1 }]),
+      // `.where()` must be both awaitable (plain updates) and expose `.returning()`
+      // (the atomic processing claim), so return a thenable that also has returning.
+      where: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([{ id: 'test-game-id' }]),
+        then: (resolve: (v: unknown) => unknown) => Promise.resolve([{ affected: 1 }]).then(resolve),
+      }),
     } as any);
 
     vi.mocked(db.db.insert).mockReturnValue({
@@ -283,7 +308,8 @@ describe('Game Processor Error Handling', () => {
     // Mock the requestMove function to throw a generic error
     vi.mocked(ai.requestMove).mockRejectedValue(new Error('Unexpected error'));
 
-    // Process the game - this should rethrow the unexpected error
-    await expect(processGame(mockGame)).rejects.toThrow('Unexpected error');
+    // The tick processor is designed to be resilient: unexpected errors are caught
+    // and logged, never propagated, so one bad game can't crash the whole tick.
+    await expect(processGame(mockGame)).resolves.not.toThrow();
   });
 });

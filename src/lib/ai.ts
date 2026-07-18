@@ -1,6 +1,7 @@
 import { streamText, generateText, createGateway } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { createAnthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 import { APIKeyError, RateLimitError, TimeoutError, ParseError } from "./errors";
 import { AI_TIMEOUTS } from "./config";
@@ -84,10 +85,55 @@ async function callGeminiNonStreaming(model: string, prompt: string, apiKey: str
   return withTimeout(textPromise, timeoutMs, `Gemini request for ${model}`);
 }
 
+/**
+ * Makes a non-streaming API call to Anthropic (Claude) with the provided parameters.
+ *
+ * @param model - The Anthropic model identifier (e.g. "claude-sonnet-4-5")
+ * @param prompt - The prompt to send to the model
+ * @param apiKey - The API key for Anthropic
+ * @param timeoutMs - The timeout in milliseconds
+ * @returns The complete response text from the model
+ */
+async function callAnthropicNonStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number): Promise<string> {
+  const anthropic = createAnthropic({ apiKey });
+
+  const textPromise = generateText({
+    model: anthropic(model),
+    prompt,
+    temperature: 0.5,
+    maxOutputTokens: 200,
+  }).then((result) => result.text);
+
+  return withTimeout(textPromise, timeoutMs, `Anthropic request for ${model}`);
+}
+
+/**
+ * Makes a non-streaming API call to OpenAI (direct) with the provided parameters.
+ * Uses the default OpenAI baseURL (unlike the Groq path, which overrides it).
+ *
+ * @param model - The OpenAI model identifier (e.g. "gpt-4o-mini")
+ * @param prompt - The prompt to send to the model
+ * @param apiKey - The API key for OpenAI
+ * @param timeoutMs - The timeout in milliseconds
+ * @returns The complete response text from the model
+ */
+async function callOpenAINonStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number): Promise<string> {
+  const openai = createOpenAI({ apiKey });
+
+  const textPromise = generateText({
+    model: openai(model),
+    prompt,
+    temperature: 0.5,
+    maxOutputTokens: 200,
+  }).then((result) => result.text);
+
+  return withTimeout(textPromise, timeoutMs, `OpenAI request for ${model}`);
+}
+
 // AI Gateway handles routing to all providers (OpenAI, Anthropic, Google, etc.)
-// Uses OIDC authentication automatically when deployed to Vercel
+// Uses OIDC authentication automatically when deployed to Vercel.
 const gateway = createGateway({
-  apiKey: process.env.AI_GATEWAY_API_KEY, // Optional - falls back to OIDC on Verceprocess.env.AI_GATEWAY_API_KEY, // Optional - falls back to OIDC on Vercel
+  apiKey: process.env.AI_GATEWAY_API_KEY, // Optional - falls back to OIDC on Vercel
 });
 
 const MoveResponseSchema = z.object({
@@ -323,11 +369,16 @@ export async function requestMove(
   modelId: string,
   params: PromptParams,
   retries = 2,
-  options?: { groqApiKey?: string; geminiApiKey?: string }
+  options?: { groqApiKey?: string; geminiApiKey?: string; anthropicApiKey?: string; openaiApiKey?: string }
 ): Promise<MoveResponse> {
   const prompt = buildPrompt(params);
   const isGroq = modelId.startsWith("groq/");
   const isGoogle = modelId.startsWith("google/");
+  const isAnthropic = modelId.startsWith("anthropic/");
+  const isOpenAI = modelId.startsWith("openai/");
+
+  // Human-readable provider label used for typed error attribution below.
+  const providerLabel = isGroq ? "Groq" : isGoogle ? "Google" : isAnthropic ? "Anthropic" : isOpenAI ? "OpenAI" : "Unknown";
 
   // Groq uses OpenAI-compatible API
   const groqModel = isGroq ? modelId.replace(/^groq\//, "") : null;
@@ -337,8 +388,16 @@ export async function requestMove(
   const googleModel = isGoogle ? modelId.replace(/^google\//, "") : null;
   const geminiApiKey = options?.geminiApiKey || process.env.GEMINI_API_KEY;
 
+  // Anthropic (Claude) models
+  const anthropicModel = isAnthropic ? modelId.replace(/^anthropic\//, "") : null;
+  const anthropicApiKey = options?.anthropicApiKey || process.env.ANTHROPIC_API_KEY;
+
+  // OpenAI (direct) models
+  const openaiModel = isOpenAI ? modelId.replace(/^openai\//, "") : null;
+  const openaiApiKey = options?.openaiApiKey || process.env.OPENAI_API_KEY;
+
   console.log(
-    `[requestMove] Model: ${modelId}, isGroq: ${isGroq}, isGoogle: ${isGoogle}, groqKey: ${!!groqApiKey}, geminiKey: ${!!geminiApiKey}`
+    `[requestMove] Model: ${modelId}, provider: ${providerLabel}, groqKey: ${!!groqApiKey}, geminiKey: ${!!geminiApiKey}, anthropicKey: ${!!anthropicApiKey}, openaiKey: ${!!openaiApiKey}`
   );
 
   // Check for missing API keys BEFORE attempting requests
@@ -347,6 +406,12 @@ export async function requestMove(
   }
   if (isGoogle && !geminiApiKey) {
     throw new APIKeyError('Google');
+  }
+  if (isAnthropic && !anthropicApiKey) {
+    throw new APIKeyError('Anthropic');
+  }
+  if (isOpenAI && !openaiApiKey) {
+    throw new APIKeyError('OpenAI');
   }
 
   let lastError: Error | null = null;
@@ -363,6 +428,12 @@ export async function requestMove(
       } else if (isGoogle && geminiApiKey) {
         // Use non-streaming Gemini API (more reliable for short JSON responses)
         text = await callGeminiNonStreaming(googleModel!, prompt, geminiApiKey, AI_TIMEOUTS.GEMINI_MS);
+      } else if (isAnthropic && anthropicApiKey) {
+        // Use non-streaming Anthropic (Claude) API
+        text = await callAnthropicNonStreaming(anthropicModel!, prompt, anthropicApiKey, AI_TIMEOUTS.ANTHROPIC_MS);
+      } else if (isOpenAI && openaiApiKey) {
+        // Use non-streaming OpenAI (direct) API
+        text = await callOpenAINonStreaming(openaiModel!, prompt, openaiApiKey, AI_TIMEOUTS.OPENAI_MS);
       } else {
         // Use AI Gateway for other providers (non-streaming fallback)
         const streamPromise = (async () => {
@@ -415,12 +486,12 @@ export async function requestMove(
         // Map SDK APICallError (e.g. from @ai-sdk/openai) by statusCode
         const statusCode = (error as { statusCode?: number }).statusCode;
         if (statusCode === 401 || statusCode === 403) {
-          const provider = isGroq ? 'Groq' : isGoogle ? 'Google' : 'Unknown';
+          const provider = providerLabel;
           lastError = new APIKeyError(provider, statusCode);
           throw lastError;
         }
         if (statusCode === 429) {
-          const provider = isGroq ? 'Groq' : isGoogle ? 'Google' : 'Unknown';
+          const provider = providerLabel;
           lastError = new RateLimitError(provider);
           throw lastError;
         }
@@ -428,7 +499,7 @@ export async function requestMove(
         // Check for Gateway authentication errors (common when API keys are missing)
         if (errorMessage.includes('Gateway') && (errorMessage.includes('authentication') || errorMessage.includes('401') || 
             causeMessage.includes('authentication') || causeMessage.includes('401'))) {
-          const provider = isGroq ? 'Groq' : isGoogle ? 'Google' : 'Unknown';
+          const provider = providerLabel;
           lastError = new APIKeyError(provider, 401);
           throw lastError;
         }
@@ -438,7 +509,7 @@ export async function requestMove(
             errorMessage.includes('Unauthorized') || errorMessage.includes('API key') ||
             errorMessage.includes('Invalid API') || causeMessage.includes('401') || 
             causeMessage.includes('403') || causeMessage.includes('Unauthorized')) {
-          const provider = isGroq ? 'Groq' : isGoogle ? 'Google' : 'Unknown';
+          const provider = providerLabel;
           lastError = new APIKeyError(provider);
           throw lastError;
         }
@@ -447,14 +518,14 @@ export async function requestMove(
         if (errorMessage.includes('429') || errorMessage.includes('rate limit') || 
             errorMessage.includes('quota exceeded') || errorMessage.includes('Too Many Requests') ||
             causeMessage.includes('429') || causeMessage.includes('rate limit')) {
-          const provider = isGroq ? 'Groq' : isGoogle ? 'Google' : 'Unknown';
+          const provider = providerLabel;
           lastError = new RateLimitError(provider);
           throw lastError;
         }
         
         // Detect timeout errors
         if (errorMessage.includes('timed out') || errorMessage.includes('timeout')) {
-          const timeoutMs = isGroq ? AI_TIMEOUTS.GROQ_MS : isGoogle ? AI_TIMEOUTS.GEMINI_MS : AI_TIMEOUTS.GATEWAY_MS;
+          const timeoutMs = isGroq ? AI_TIMEOUTS.GROQ_MS : isGoogle ? AI_TIMEOUTS.GEMINI_MS : isAnthropic ? AI_TIMEOUTS.ANTHROPIC_MS : isOpenAI ? AI_TIMEOUTS.OPENAI_MS : AI_TIMEOUTS.GATEWAY_MS;
           lastError = new TimeoutError(`AI request for ${modelId}`, timeoutMs);
         } else {
           lastError = error instanceof Error ? error : new Error(String(error));

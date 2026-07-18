@@ -2,17 +2,24 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { games, models } from "@/db/schema";
 import { eq, desc, inArray } from "drizzle-orm";
+import { GameStatusSchema } from "@/types/api";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const status = searchParams.get("status") || "active";
+  const statusParsed = GameStatusSchema.safeParse(searchParams.get("status") ?? "active");
+  if (!statusParsed.success) {
+    return NextResponse.json(
+      { error: "Invalid status. Must be 'active' or 'complete'." },
+      { status: 400 }
+    );
+  }
   const limitParam = searchParams.get("limit");
   const limit = limitParam ? parseInt(limitParam, 10) : 8;
 
   // Validate limit parameter
   if (isNaN(limit) || limit < 1 || limit > 50) {
     return NextResponse.json(
-      { error: "Limit must be a number between 1 and 50" }, 
+      { error: "Limit must be a number between 1 and 50" },
       { status: 400 }
     );
   }
@@ -22,7 +29,7 @@ export async function GET(request: Request) {
     const gamesList = await db
       .select()
       .from(games)
-      .where(eq(games.status, status as "active" | "complete"))
+      .where(eq(games.status, statusParsed.data))
       .orderBy(desc(games.startedAt))
       .limit(limit);
 

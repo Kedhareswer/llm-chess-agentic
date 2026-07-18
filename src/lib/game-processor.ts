@@ -1,35 +1,46 @@
 import { db } from "@/db";
 import { games, moves, models, tournament } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, desc, and, or, lt, isNull } from "drizzle-orm";
 import { validateMove, applyMove, getLegalMoves, getTurn, isGameOver, getGameResult, getGameEndReason, getMoveNumber } from "./chess";
 import { requestMove } from "./ai";
 import { calculateNewElo, outcomeFromResult } from "./elo";
 import { GAME_RULES } from "./config";
 import type { Game } from "@/db/schema";
 import { getGroqApiKey, getGeminiApiKey } from "@/lib/api-key-store";
+import { decryptSecret } from "@/lib/crypto";
 import { APIKeyError, RateLimitError, TimeoutError, ParseError } from "./errors";
 
-// Track games currently being processed to prevent race conditions
-// Map of gameId -> timestamp when processing started
-const processingGames: Map<string, number> = new Map();
-const PROCESSING_TIMEOUT_MS = 20_000; // Release lock if processing takes > 20 seconds
+// Release a stale processing claim after this long, in case an instance died
+// mid-tick without clearing it.
+const PROCESSING_TIMEOUT_MS = 20_000;
 
 export async function processGame(game: Game): Promise<void> {
-  // Check if game is being processed, but allow retry if it's been stuck too long
-  const processingStart = processingGames.get(game.id);
-  if (processingStart) {
-    const elapsed = Date.now() - processingStart;
-    if (elapsed < PROCESSING_TIMEOUT_MS) {
-      console.log(`[processGame] Game ${game.id} already being processed (${elapsed}ms elapsed), skipping`);
-      return;
-    } else {
-      // Lock has been held too long - likely stuck, release it
-      console.warn(`[processGame] Game ${game.id} processing lock expired after ${elapsed}ms, releasing and retrying`);
-      processingGames.delete(game.id);
-    }
-  }
+  // Atomically claim the game before processing. This is the serverless-safe
+  // replacement for an in-memory lock (a module-level Map gives no protection
+  // across instances/tabs). Only one caller can flip processing false->true for
+  // an active game whose prior claim is either clear or stale, so overlapping
+  // ticks can never double-apply a move.
+  const staleBefore = new Date(Date.now() - PROCESSING_TIMEOUT_MS);
+  const claimed = await db
+    .update(games)
+    .set({ processing: true, processingStartedAt: new Date() })
+    .where(
+      and(
+        eq(games.id, game.id),
+        eq(games.status, "active"),
+        or(
+          eq(games.processing, false),
+          isNull(games.processingStartedAt),
+          lt(games.processingStartedAt, staleBefore),
+        ),
+      ),
+    )
+    .returning({ id: games.id });
 
-  processingGames.set(game.id, Date.now());
+  if (claimed.length === 0) {
+    console.log(`[processGame] Game ${game.id} is claimed elsewhere or not active, skipping`);
+    return;
+  }
 
   try {
     // Re-fetch game to check if still active (protect against concurrent ticks)
@@ -44,9 +55,10 @@ export async function processGame(game: Game): Promise<void> {
     return;
   }
 
-  // Use game-specific API keys if available, otherwise fall back to global keys
-  const groqApiKey = currentGame.groqApiKey || (await getGroqApiKey());
-  const geminiApiKey = currentGame.geminiApiKey || (await getGeminiApiKey());
+  // Use game-specific API keys if available (decrypting at-rest values), otherwise
+  // fall back to global keys.
+  const groqApiKey = decryptSecret(currentGame.groqApiKey) || (await getGroqApiKey());
+  const geminiApiKey = decryptSecret(currentGame.geminiApiKey) || (await getGeminiApiKey());
   console.log(`[processGame] Game ${currentGame.id}, groqApiKey present: ${!!groqApiKey}, geminiKey present: ${!!geminiApiKey}`);
 
   const turn = getTurn(currentGame.fen);
@@ -67,13 +79,19 @@ export async function processGame(game: Game): Promise<void> {
     return;
   }
 
-  // Get recent moves for context (include color for repetition detection)
-  const recentMoves = await db
-    .select({ moveSan: moves.moveSan, color: moves.color })
-    .from(moves)
-    .where(eq(moves.gameId, currentGame.id))
-    .orderBy(moves.moveNumber)
-    .limit(10);
+  // Get recent moves for context (include color for repetition detection).
+  // Order by recency (createdAt desc) and take the LAST 10 plies, then reverse to
+  // chronological order. moveNumber alone is coarse — both plies of a full-move
+  // share the same number — and ascending order would return the opening moves,
+  // starving the prompt and repetition detection of the actual recent history.
+  const recentMoves = (
+    await db
+      .select({ moveSan: moves.moveSan, color: moves.color })
+      .from(moves)
+      .where(eq(moves.gameId, currentGame.id))
+      .orderBy(desc(moves.createdAt), desc(moves.moveNumber))
+      .limit(10)
+  ).reverse();
 
   const legalMoves = getLegalMoves(currentGame.fen);
 
@@ -206,16 +224,16 @@ export async function processGame(game: Game): Promise<void> {
   } catch (error) {
     // Log unexpected errors but don't let them crash the tick
     console.error(`[processGame] Unexpected error processing game ${game.id}:`, error);
-    // Lock will be released in finally block
+    // Claim will be released in finally block
   } finally {
-    // Always release the lock, even on errors
-    const processingTime = processingGames.get(game.id);
-    if (processingTime) {
-      const elapsed = Date.now() - processingTime;
-      processingGames.delete(game.id);
-      if (elapsed > 10_000) {
-        console.warn(`[processGame] Game ${game.id} took ${elapsed}ms to process (unusually long)`);
-      }
+    // Always release the processing claim, even on errors.
+    try {
+      await db
+        .update(games)
+        .set({ processing: false, processingStartedAt: null })
+        .where(eq(games.id, game.id));
+    } catch (releaseErr) {
+      console.error(`[processGame] Failed to release processing claim for ${game.id}:`, releaseErr);
     }
   }
 }

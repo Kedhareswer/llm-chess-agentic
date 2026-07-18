@@ -1,6 +1,32 @@
 import { Chess } from "chess.js";
 
 /**
+ * Loads a chess position from a PGN when available, falling back to a FEN.
+ *
+ * IMPORTANT: the chess.js `Chess` constructor only accepts a FEN string — passing
+ * a PGN to it throws "Invalid FEN". Move history (needed for threefold-repetition
+ * and fifty-move detection) can only be recovered by parsing the PGN, so we load
+ * it with `loadPgn()` and gracefully fall back to the FEN-only position if the
+ * PGN is missing or unparseable.
+ *
+ * @param fen - The current position in Forsyth-Edwards Notation
+ * @param pgn - Optional full-game PGN with move history
+ * @returns A chess.js instance positioned at the given game state
+ */
+function loadPosition(fen: string, pgn?: string): Chess {
+  if (pgn && pgn.trim().length > 0) {
+    try {
+      const chess = new Chess();
+      chess.loadPgn(pgn);
+      return chess;
+    } catch {
+      // Malformed/empty PGN — fall back to the FEN-only position below.
+    }
+  }
+  return new Chess(fen);
+}
+
+/**
  * Validates if a move is legal in the given position.
  * 
  * @param fen - The Forsyth-Edwards Notation string representing the board position
@@ -65,7 +91,7 @@ export function getTurn(fen: string): "w" | "b" {
  * @returns True if the game is over, false otherwise
  */
 export function isGameOver(fen: string, pgn?: string): boolean {
-  const chess = pgn ? new Chess(pgn) : new Chess(fen);
+  const chess = loadPosition(fen, pgn);
   return chess.isGameOver();
 }
 
@@ -78,7 +104,7 @@ export function isGameOver(fen: string, pgn?: string): boolean {
  * @returns The game result ('1-0' for white win, '0-1' for black win, '1/2-1/2' for draw) or null if game is not over
  */
 export function getGameResult(fen: string, pgn?: string): "1-0" | "0-1" | "1/2-1/2" | null {
-  const chess = pgn ? new Chess(pgn) : new Chess(fen);
+  const chess = loadPosition(fen, pgn);
   if (!chess.isGameOver()) return null;
 
   if (chess.isCheckmate()) {
@@ -106,7 +132,7 @@ export function getGameResult(fen: string, pgn?: string): "1-0" | "0-1" | "1/2-1
  * @returns A string describing why the game ended, or null if game is not over
  */
 export function getGameEndReason(fen: string, pgn?: string): string | null {
-  const chess = pgn ? new Chess(pgn) : new Chess(fen);
+  const chess = loadPosition(fen, pgn);
   if (!chess.isGameOver()) return null;
 
   if (chess.isCheckmate()) {

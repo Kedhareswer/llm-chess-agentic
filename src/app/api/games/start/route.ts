@@ -5,6 +5,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { processGame } from "@/lib/game-processor";
 import { randomUUID } from "crypto";
 import { StartGameRequestSchema } from "@/types/api";
+import { encryptSecret } from "@/lib/crypto";
 
 export async function POST(request: Request) {
   // Validate request body
@@ -72,8 +73,8 @@ export async function POST(request: Request) {
         blackId: black.id,
         status: "active",
         startedAt: new Date(),
-        groqApiKey: groqApiKey?.trim() || null,
-        geminiApiKey: geminiApiKey?.trim() || null,
+        groqApiKey: groqApiKey?.trim() ? encryptSecret(groqApiKey.trim()) : null,
+        geminiApiKey: geminiApiKey?.trim() ? encryptSecret(geminiApiKey.trim()) : null,
       });
 
       return { gameId, white: white.id, black: black.id };

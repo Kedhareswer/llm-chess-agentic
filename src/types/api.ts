@@ -1,14 +1,23 @@
 import { z } from "zod";
 import type { Game, Model, Move } from "@/db/schema";
 
+// Shared enum schema for the `?status=` query param, matching the DB enum.
+export const GameStatusSchema = z.enum(["active", "complete"]);
+export type GameStatus = z.infer<typeof GameStatusSchema>;
+
 // Request schemas
-export const StartGameRequestSchema = z.object({
-  modelIds: z.array(z.string()).min(2, "At least two models required"),
-  groqApiKey: z.string().optional(), // Optional API key for Groq models
-  geminiApiKey: z.string().optional(), // Optional API key for Gemini models
-  whiteMode: z.string().optional(), // Optional skill mode for white player
-  blackMode: z.string().optional(), // Optional skill mode for black player
-});
+export const StartGameRequestSchema = z
+  .object({
+    modelIds: z.array(z.string()).min(2, "At least two models required"),
+    groqApiKey: z.string().optional(), // Optional API key for Groq models
+    geminiApiKey: z.string().optional(), // Optional API key for Gemini models
+    whiteMode: z.string().optional(), // Optional skill mode for white player
+    blackMode: z.string().optional(), // Optional skill mode for black player
+  })
+  .refine((data) => data.modelIds[0] !== data.modelIds[1], {
+    message: "A model cannot play against itself; pick two different models",
+    path: ["modelIds"],
+  });
 
 export const SetAPIKeyRequestSchema = z.object({
   key: z.string().min(1, "API key cannot be empty"),

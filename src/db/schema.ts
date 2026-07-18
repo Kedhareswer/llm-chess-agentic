@@ -33,6 +33,10 @@ export const games = pgTable("games", {
   blackTimeoutWarnings: integer("black_timeout_warnings").notNull().default(0),
   groqApiKey: text("groq_api_key"), // API key for Groq models in this game
   geminiApiKey: text("gemini_api_key"), // API key for Gemini models in this game
+  // Serverless-safe processing claim: a game is claimed atomically before a tick
+  // processes it, preventing overlapping ticks / instances from double-moving.
+  processing: boolean("processing").notNull().default(false),
+  processingStartedAt: timestamp("processing_started_at"),
 });
 
 export const moves = pgTable("moves", {

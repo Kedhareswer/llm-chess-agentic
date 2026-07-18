@@ -1,83 +1,56 @@
 import { db } from "@/db";
 import { tournament } from "@/db/schema";
 import { eq } from "drizzle-orm";
-
-// Cache for API keys to avoid repeated DB queries
-let groqApiKeyCache: string | null | undefined = undefined;
-let geminiApiKeyCache: string | null | undefined = undefined;
+import { encryptSecret, decryptSecret } from "@/lib/crypto";
 
 /**
- * Sets the Groq API key in the database (tournament table, id=1).
- * Also updates the in-memory cache.
+ * Global (server-wide) API keys stored in the singleton tournament row (id=1).
+ *
+ * Notes:
+ * - Keys are encrypted at rest when ENCRYPTION_KEY is configured (see crypto.ts);
+ *   otherwise stored as plaintext for backward compatibility.
+ * - There is intentionally NO module-level cache. A mutable module singleton is
+ *   shared across all requests on a warm serverless instance, which previously
+ *   risked one caller's key being served to another. Reading fresh per call is
+ *   both safe and cheap (at most a couple of lookups per move).
  */
+
+/** Sets the global Groq API key (encrypted at rest when configured). */
 export async function setGroqApiKey(key: string): Promise<void> {
-  const trimmedKey = key.trim();
-  groqApiKeyCache = trimmedKey;
-  
-  // Upsert: update if tournament row exists (id=1), otherwise insert
+  const stored = encryptSecret(key.trim());
   await db
     .insert(tournament)
-    .values({ id: 1, groqApiKey: trimmedKey })
-    .onConflictDoUpdate({
-      target: tournament.id,
-      set: { groqApiKey: trimmedKey },
-    });
+    .values({ id: 1, groqApiKey: stored })
+    .onConflictDoUpdate({ target: tournament.id, set: { groqApiKey: stored } });
 }
 
-/**
- * Gets the Groq API key from database (with cache fallback), then environment variable.
- */
+/** Gets the global Groq API key from the DB, falling back to the env var. */
 export async function getGroqApiKey(): Promise<string | undefined> {
-  // Return cached value if available
-  if (groqApiKeyCache !== undefined) {
-    return groqApiKeyCache || process.env.GROQ_API_KEY || undefined;
-  }
-  
-  // Fetch from database
-  const [tournamentRow] = await db
+  const [row] = await db
     .select({ groqApiKey: tournament.groqApiKey })
     .from(tournament)
     .where(eq(tournament.id, 1))
     .limit(1);
-  
-  groqApiKeyCache = tournamentRow?.groqApiKey || null;
-  return groqApiKeyCache || process.env.GROQ_API_KEY || undefined;
+
+  return decryptSecret(row?.groqApiKey) || process.env.GROQ_API_KEY || undefined;
 }
 
-/**
- * Sets the Gemini API key in the database (tournament table, id=1).
- * Also updates the in-memory cache.
- */
+/** Sets the global Gemini API key (encrypted at rest when configured). */
 export async function setGeminiApiKey(key: string): Promise<void> {
-  const trimmedKey = key.trim();
-  geminiApiKeyCache = trimmedKey;
-  
-  // Upsert: update if tournament row exists (id=1), otherwise insert
+  const stored = encryptSecret(key.trim());
   await db
     .insert(tournament)
-    .values({ id: 1, geminiApiKey: trimmedKey })
-    .onConflictDoUpdate({
-      target: tournament.id,
-      set: { geminiApiKey: trimmedKey },
-    });
+    .values({ id: 1, geminiApiKey: stored })
+    .onConflictDoUpdate({ target: tournament.id, set: { geminiApiKey: stored } });
 }
 
-/**
- * Gets the Gemini API key from database (with cache fallback), then environment variable.
- */
+/** Gets the global Gemini API key from the DB, falling back to the env var. */
 export async function getGeminiApiKey(): Promise<string | undefined> {
-  // Return cached value if available
-  if (geminiApiKeyCache !== undefined) {
-    return geminiApiKeyCache || process.env.GEMINI_API_KEY || undefined;
-  }
-  
-  // Fetch from database
-  const [tournamentRow] = await db
+  const [row] = await db
     .select({ geminiApiKey: tournament.geminiApiKey })
     .from(tournament)
     .where(eq(tournament.id, 1))
     .limit(1);
-  
-  geminiApiKeyCache = tournamentRow?.geminiApiKey || null;
-  return geminiApiKeyCache || process.env.GEMINI_API_KEY || undefined;
+
+  return decryptSecret(row?.geminiApiKey) || process.env.GEMINI_API_KEY || undefined;
 }

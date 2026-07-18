@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Non-blocking for now: the tree carries pre-existing lint debt (mostly
+      # no-explicit-any in tests/scripts). Surfaced in CI but not gating, so PRs
+      # aren't blocked by unrelated debt. Flip to blocking once the backlog is cleared.
+      - name: Lint
+        run: pnpm lint
+        continue-on-error: true
+
+      - name: Typecheck
+        run: pnpm exec tsc --noEmit
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+        env:
+          # Build must not require secrets — the app connects to the DB lazily at
+          # request time, so a placeholder keeps `next build` self-contained.
+          DATABASE_URL: postgresql://user:pass@localhost:5432/placeholder

@@ -8,6 +8,8 @@
 export const AI_TIMEOUTS = {
   GROQ_MS: 7_000,
   GEMINI_MS: 30_000, // Increased from 15s to 30s to handle API slowness and cold starts
+  ANTHROPIC_MS: 20_000, // Claude models; allow headroom for extended-thinking variants
+  OPENAI_MS: 20_000, // Direct OpenAI; reasoning models (o-series) can be slow
   GATEWAY_MS: 8_000,
 } as const;
 

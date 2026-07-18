@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Vendored third-party bundle (Stockfish WASM glue) — not our source to lint.
+    "public/**",
   ]),
 ]);
 

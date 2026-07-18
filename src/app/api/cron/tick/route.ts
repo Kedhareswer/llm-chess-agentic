@@ -1,15 +1,22 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { tournament, games } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { processGame } from "@/lib/game-processor";
+import { requireCron } from "@/lib/auth";
 
 async function handleTick(request: Request) {
-  // Allow all tick requests - manual ticks from UI need to work without auth
-  // In production, Vercel cron will still work, and manual ticks are user-initiated
+  // Gate the tick behind CRON_SECRET (Vercel Cron sends it automatically).
+  const denied = requireCron(request);
+  if (denied) return denied;
 
   // Check if tournament is running
   const [state] = await db.select().from(tournament).where(eq(tournament.id, 1));
+
+  // Guard against a missing singleton row (would otherwise 500 on state.status).
+  if (!state) {
+    return NextResponse.json({ skipped: true, reason: "Tournament not initialized" });
+  }
 
   if (state.status !== "running") {
     return NextResponse.json({ skipped: true, reason: "Tournament not running" });
@@ -38,10 +45,11 @@ async function handleTick(request: Request) {
     );
   }
 
-  // Increment tick count and update lastTickAt
+  // Increment tick count atomically (avoids lost updates under concurrent ticks)
+  // and update lastTickAt.
   await db
     .update(tournament)
-    .set({ tickCount: state.tickCount + 1, lastTickAt: new Date() })
+    .set({ tickCount: sql`${tournament.tickCount} + 1`, lastTickAt: new Date() })
     .where(eq(tournament.id, 1));
 
   return NextResponse.json({

@@ -28,6 +28,14 @@ const MODELS = [
   { id: "google/models/gemini-2.0-flash-001", name: "Gemini 2.0 Flash 001", provider: "google", active: true },
   { id: "google/models/gemini-2.0-flash-lite", name: "Gemini 2.0 Flash Lite", provider: "google", active: true },
   { id: "google/models/gemini-2.0-flash-lite-001", name: "Gemini 2.0 Flash Lite 001", provider: "google", active: true },
+
+  // Anthropic (Claude) — inactive by default; enable after setting ANTHROPIC_API_KEY.
+  { id: "anthropic/claude-sonnet-4-5", name: "Claude Sonnet 4.5", provider: "anthropic", active: false },
+  { id: "anthropic/claude-3-5-haiku-latest", name: "Claude 3.5 Haiku", provider: "anthropic", active: false },
+
+  // OpenAI (direct) — inactive by default; enable after setting OPENAI_API_KEY.
+  { id: "openai/gpt-4o", name: "GPT-4o", provider: "openai", active: false },
+  { id: "openai/gpt-4o-mini", name: "GPT-4o mini", provider: "openai", active: false },
 ];
 
 async function seed() {
