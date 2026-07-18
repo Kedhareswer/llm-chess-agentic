@@ -13,6 +13,7 @@ import { usePageVisibility } from "@/hooks/use-page-visibility";
 import { useSettings } from "@/contexts/settings-context";
 import { useLeaderboard } from "@/contexts/leaderboard-context";
 import { useChessSounds } from "@/hooks/use-chess-sounds";
+import { useGamePlayback } from "@/hooks/use-game-playback";
 import { Chess } from "chess.js";
 import type { Game, Move, Model } from "@/db/schema";
 
@@ -47,8 +48,6 @@ export default function Home() {
   const [tickInfo, setTickInfo] = useState<string | null>(null);
   const [selectedMoveId, setSelectedMoveId] = useState<string | null>(null);
   const [viewPosition, setViewPosition] = useState<string | null>(null);
-  const [previousFen, setPreviousFen] = useState<string | null>(null);
-  const [previousMoveCount, setPreviousMoveCount] = useState<number>(0);
   const [isAnimating, setIsAnimating] = useState(false);
 
   // Check for existing active game on mount
@@ -130,16 +129,23 @@ export default function Home() {
   useEffect(() => {
     if (gameState !== "active" || !activeGameId) return;
 
-    const tickInterval = setInterval(async () => {
+    let cancelled = false;
+    const tick = async () => {
       try {
         await fetch("/api/cron/tick");
-        await fetchGameData();
+        if (!cancelled) await fetchGameData();
       } catch {
         // Silently ignore tick errors
       }
-    }, POLLING_INTERVALS.AUTO_TICK_MS);
+    };
+    // Kick one off right away so moves start flowing without a first-interval wait.
+    tick();
+    const tickInterval = setInterval(tick, POLLING_INTERVALS.AUTO_TICK_MS);
 
-    return () => clearInterval(tickInterval);
+    return () => {
+      cancelled = true;
+      clearInterval(tickInterval);
+    };
   }, [gameState, activeGameId, fetchGameData]);
 
   // Elapsed timer
@@ -239,8 +245,10 @@ export default function Home() {
         throw new Error(data.error || "Failed to start game");
       }
 
-      // Trigger first tick
-      await fetch("/api/cron/tick", { method: "POST" }).catch(() => {});
+      // Show the board right away (the first move was already played by the
+      // start request). Kick the next batch off in the background — don't await
+      // it, or the user waits on the whole tick before seeing anything.
+      fetch("/api/cron/tick", { method: "POST" }).catch(() => {});
 
       // Set active game
       setActiveGameId(data.gameId || data.id);
@@ -290,79 +298,50 @@ export default function Home() {
     setSelectedMoveId(null);
   };
 
-  // Determine board position and turn
-  const boardPosition = viewPosition || gameData?.game?.fen || STARTING_FEN;
-  const isWhiteTurn = boardPosition.split(" ")[1] === "w";
+  // Smooth playback: walk the board forward one move at a time instead of
+  // snapping to the latest position (which made bursts of server moves teleport).
+  const { shownCount, displayedFen, caughtUp } = useGamePlayback(gameData?.moves, gameData?.game?.id);
 
-  // Track FEN changes to trigger animations and sounds
+  // Determine board position and turn. When the user is browsing history
+  // (viewPosition) that wins; otherwise show the playback position.
+  const boardPosition = viewPosition || displayedFen;
+  const isWhiteTurn = boardPosition.split(" ")[1] === "w";
+  // Only the moves revealed so far, so the reasoning panels match the board.
+  const shownMoves = gameData?.moves ? gameData.moves.slice(0, shownCount) : [];
+  // "Thinking" only once the board has caught up to every produced move.
+  const showThinking = gameState === "active" && caughtUp && !viewPosition;
+
+  // Animate + play a sound each time the board reveals a new move (driven by the
+  // playback cursor, so bursts of server moves are felt one at a time).
+  const prevShownRef = useRef(0);
   useEffect(() => {
-    const currentFen = gameData?.game?.fen;
-    const currentMoveCount = gameData?.moves?.length || 0;
-    
-    // Only play sounds when:
-    // 1. We're viewing the current position (not historical)
-    // 2. A new move was actually added (move count increased)
-    // 3. FEN changed
-    const isNewMove = currentMoveCount > previousMoveCount;
-    const isCurrentPosition = !viewPosition;
-    const fenChanged = currentFen && previousFen && currentFen !== previousFen;
-    
-    if (fenChanged && isCurrentPosition) {
-      setIsAnimating(true);
-      const timer = setTimeout(() => setIsAnimating(false), 350);
-      
-      // Only play sound if a new move was actually applied
-      if (isNewMove && sounds && gameData?.moves) {
-        try {
-          const chess = new Chess(previousFen);
-          const latestMove = gameData.moves[gameData.moves.length - 1];
-          
-          if (latestMove) {
-            const moveSan = latestMove.moveSan;
-            const chessAfter = new Chess(currentFen);
-            
-            // Check for checkmate first
-            if (chessAfter.isCheckmate()) {
-              sounds.playCheckmate();
-            }
-            // Check for check
-            else if (chessAfter.isCheck()) {
-              sounds.playCheck();
-            }
-            // Check for capture (contains 'x' in SAN)
-            else if (moveSan.includes('x')) {
-              sounds.playCapture();
-            }
-            // Check for castling
-            else if (moveSan === 'O-O' || moveSan === 'O-O-O') {
-              sounds.playCastle();
-            }
-            // Check for promotion (contains '=')
-            else if (moveSan.includes('=')) {
-              sounds.playPromotion();
-            }
-            // Regular move
-            else {
-              sounds.playMove();
-            }
-          }
-        } catch (error) {
-          // Fallback to regular move sound if analysis fails
-          sounds.playMove();
-        }
+    const moves = gameData?.moves;
+    if (viewPosition || !moves || shownCount <= prevShownRef.current || shownCount === 0) {
+      prevShownRef.current = shownCount;
+      return;
+    }
+    prevShownRef.current = shownCount;
+
+    setIsAnimating(true);
+    const timer = setTimeout(() => setIsAnimating(false), 350);
+
+    const move = moves[shownCount - 1];
+    if (sounds && move) {
+      try {
+        const san = move.moveSan;
+        const after = new Chess(move.fenAfter);
+        if (after.isCheckmate()) sounds.playCheckmate();
+        else if (after.isCheck()) sounds.playCheck();
+        else if (san.includes("x")) sounds.playCapture();
+        else if (san === "O-O" || san === "O-O-O") sounds.playCastle();
+        else if (san.includes("=")) sounds.playPromotion();
+        else sounds.playMove();
+      } catch {
+        sounds.playMove();
       }
-      
-      return () => clearTimeout(timer);
     }
-    
-    // Update previous state
-    if (currentFen) {
-      setPreviousFen(currentFen);
-    }
-    if (currentMoveCount !== undefined) {
-      setPreviousMoveCount(currentMoveCount);
-    }
-  }, [gameData?.game?.fen, gameData?.moves?.length, previousFen, previousMoveCount, viewPosition, sounds]);
+    return () => clearTimeout(timer);
+  }, [shownCount, gameData?.moves, viewPosition, sounds]);
   const isActive = gameState === "active";
 
   // Clear any start error when the user changes a selection (a fresh attempt).
@@ -528,14 +507,14 @@ export default function Home() {
             {/* Left panel - White */}
             <div
               className={`col-span-3 border-r-2 overflow-y-auto ${
-                isActive && isWhiteTurn ? "border-yellow-400 bg-yellow-50/30" : "border-gray-200"
+                showThinking && isWhiteTurn ? "border-yellow-400 bg-yellow-50/30" : "border-gray-200"
               }`}
             >
               <ReasoningPanel
                 model={gameData.white}
-                moves={gameData.moves}
+                moves={shownMoves}
                 color="white"
-                isThinking={isActive && isWhiteTurn}
+                isThinking={showThinking && isWhiteTurn}
                 selectedMoveId={selectedMoveId}
                 onMoveClick={handleMoveClick}
                 onViewSnapshot={handleViewSnapshot}
@@ -571,14 +550,14 @@ export default function Home() {
             {/* Right panel - Black */}
             <div
               className={`col-span-3 border-l-2 overflow-y-auto ${
-                isActive && !isWhiteTurn ? "border-yellow-400 bg-yellow-50/30" : "border-gray-200"
+                showThinking && !isWhiteTurn ? "border-yellow-400 bg-yellow-50/30" : "border-gray-200"
               }`}
             >
               <ReasoningPanel
                 model={gameData.black}
-                moves={gameData.moves}
+                moves={shownMoves}
                 color="black"
-                isThinking={isActive && !isWhiteTurn}
+                isThinking={showThinking && !isWhiteTurn}
                 selectedMoveId={selectedMoveId}
                 onMoveClick={handleMoveClick}
                 onViewSnapshot={handleViewSnapshot}

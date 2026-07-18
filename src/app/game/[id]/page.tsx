@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useParams } from "next/navigation";
 import { Chessboard } from "react-chessboard";
 import { ReasoningPanel } from "@/components/reasoning-panel";
@@ -12,6 +12,7 @@ import { useDebouncedCallback } from "@/hooks/use-debounced-callback";
 import { useGameData } from "@/hooks/use-game-data";
 import { useChessSounds } from "@/hooks/use-chess-sounds";
 import { useGameAnalysis } from "@/hooks/use-game-analysis";
+import { useGamePlayback } from "@/hooks/use-game-playback";
 import { Chess } from "chess.js";
 
 interface GameData {
@@ -27,8 +28,6 @@ export default function GamePage() {
   const [elapsed, setElapsed] = useState("00:00");
   const [selectedMoveId, setSelectedMoveId] = useState<string | null>(null);
   const [viewPosition, setViewPosition] = useState<string | null>(null);
-  const [previousFen, setPreviousFen] = useState<string | null>(null);
-  const [previousMoveCount, setPreviousMoveCount] = useState<number>(0);
   const [isAnimating, setIsAnimating] = useState(false);
 
   const gameId = params.id as string;
@@ -40,75 +39,39 @@ export default function GamePage() {
   // not-yet-analyzed game, then refetches so persisted stats appear.
   const analysisProgress = useGameAnalysis(data?.game, data?.moves, refetch);
 
-  // Track FEN changes to trigger animations and sounds
+  // Smooth playback: reveal moves one at a time instead of snapping to latest.
+  const { shownCount, displayedFen, caughtUp } = useGamePlayback(data?.moves, data?.game?.id);
+
+  // Animate + play a sound each time the board reveals a new move.
+  const prevShownRef = useRef(0);
   useEffect(() => {
-    const currentFen = data?.game?.fen;
-    const currentMoveCount = data?.moves?.length || 0;
-    
-    // Only play sounds when:
-    // 1. We're viewing the current position (not historical)
-    // 2. A new move was actually added (move count increased)
-    // 3. FEN changed
-    const isNewMove = currentMoveCount > previousMoveCount;
-    const isCurrentPosition = !viewPosition;
-    const fenChanged = currentFen && previousFen && currentFen !== previousFen;
-    
-    if (fenChanged && isCurrentPosition) {
-      setIsAnimating(true);
-      const timer = setTimeout(() => setIsAnimating(false), 350);
-      
-      // Only play sound if a new move was actually applied
-      if (isNewMove && sounds) {
-        try {
-          const chess = new Chess(previousFen);
-          const latestMove = data.moves[data.moves.length - 1];
-          
-          if (latestMove) {
-            const moveSan = latestMove.moveSan;
-            const chessAfter = new Chess(currentFen);
-            
-            // Check for checkmate first
-            if (chessAfter.isCheckmate()) {
-              sounds.playCheckmate();
-            }
-            // Check for check
-            else if (chessAfter.isCheck()) {
-              sounds.playCheck();
-            }
-            // Check for capture (contains 'x' in SAN)
-            else if (moveSan.includes('x')) {
-              sounds.playCapture();
-            }
-            // Check for castling
-            else if (moveSan === 'O-O' || moveSan === 'O-O-O') {
-              sounds.playCastle();
-            }
-            // Check for promotion (contains '=')
-            else if (moveSan.includes('=')) {
-              sounds.playPromotion();
-            }
-            // Regular move
-            else {
-              sounds.playMove();
-            }
-          }
-        } catch (error) {
-          // Fallback to regular move sound if analysis fails
-          sounds.playMove();
-        }
+    const moves = data?.moves;
+    if (viewPosition || !moves || shownCount <= prevShownRef.current || shownCount === 0) {
+      prevShownRef.current = shownCount;
+      return;
+    }
+    prevShownRef.current = shownCount;
+
+    setIsAnimating(true);
+    const timer = setTimeout(() => setIsAnimating(false), 350);
+
+    const move = moves[shownCount - 1];
+    if (sounds && move) {
+      try {
+        const san = move.moveSan;
+        const after = new Chess(move.fenAfter);
+        if (after.isCheckmate()) sounds.playCheckmate();
+        else if (after.isCheck()) sounds.playCheck();
+        else if (san.includes("x")) sounds.playCapture();
+        else if (san === "O-O" || san === "O-O-O") sounds.playCastle();
+        else if (san.includes("=")) sounds.playPromotion();
+        else sounds.playMove();
+      } catch {
+        sounds.playMove();
       }
-      
-      return () => clearTimeout(timer);
     }
-    
-    // Update previous state
-    if (currentFen) {
-      setPreviousFen(currentFen);
-    }
-    if (currentMoveCount !== undefined) {
-      setPreviousMoveCount(currentMoveCount);
-    }
-  }, [data?.game?.fen, data?.moves?.length, previousFen, previousMoveCount, viewPosition, sounds]);
+    return () => clearTimeout(timer);
+  }, [shownCount, data?.moves, viewPosition, sounds]);
   
   useEffect(() => {
     if (data?.game?.startedAt) {
@@ -182,12 +145,15 @@ export default function GamePage() {
     );
   }
 
-  const isWhiteTurn = data.game.fen.split(" ")[1] === "w";
   const isActive = data.game.status === "active";
+  // Board follows the playback cursor (one move at a time), not the latest FEN.
+  const boardPosition = viewPosition || displayedFen;
+  const isWhiteTurn = boardPosition.split(" ")[1] === "w";
+  const shownMoves = data.moves.slice(0, shownCount);
+  const showThinking = isActive && caughtUp && !viewPosition;
 
   // Get the selected move and its position
   const selectedMove = selectedMoveId ? data.moves.find(m => m.id === selectedMoveId) : null;
-  const boardPosition = viewPosition || data.game.fen;
 
   const handleMoveClick = (moveId: string) => {
     setSelectedMoveId(moveId);
@@ -224,11 +190,11 @@ export default function GamePage() {
           )}
         </div>
         <h1 className="font-bold text-xl text-center">
-          <span className={isActive && isWhiteTurn ? "bg-yellow-200 px-2" : ""}>
+          <span className={showThinking && isWhiteTurn ? "bg-yellow-200 px-2" : ""}>
             {data.white.name}
           </span>
           {" vs "}
-          <span className={isActive && !isWhiteTurn ? "bg-yellow-200 px-2" : ""}>
+          <span className={showThinking && !isWhiteTurn ? "bg-yellow-200 px-2" : ""}>
             {data.black.name}
           </span>
           {data.game.result && (
@@ -297,14 +263,14 @@ export default function GamePage() {
         {/* Left panel - 3 cols */}
         <div
           className={`col-span-3 border-2 h-[calc(100vh-180px)] overflow-y-auto ${
-            isActive && isWhiteTurn ? "border-yellow-400 bg-yellow-50" : "border-black"
+            showThinking && isWhiteTurn ? "border-yellow-400 bg-yellow-50" : "border-black"
           }`}
         >
           <ReasoningPanel 
             model={data.white} 
-            moves={data.moves} 
+            moves={shownMoves} 
             color="white" 
-            isThinking={isActive && isWhiteTurn}
+            isThinking={showThinking && isWhiteTurn}
             selectedMoveId={selectedMoveId}
             onMoveClick={handleMoveClick}
             onViewSnapshot={handleViewSnapshot}
@@ -341,14 +307,14 @@ export default function GamePage() {
         {/* Right panel - 3 cols */}
         <div
           className={`col-span-3 border-2 h-[calc(100vh-180px)] overflow-y-auto ${
-            isActive && !isWhiteTurn ? "border-yellow-400 bg-yellow-50" : "border-black"
+            showThinking && !isWhiteTurn ? "border-yellow-400 bg-yellow-50" : "border-black"
           }`}
         >
           <ReasoningPanel 
             model={data.black} 
-            moves={data.moves} 
+            moves={shownMoves} 
             color="black" 
-            isThinking={isActive && !isWhiteTurn}
+            isThinking={showThinking && !isWhiteTurn}
             selectedMoveId={selectedMoveId}
             onMoveClick={handleMoveClick}
             onViewSnapshot={handleViewSnapshot}

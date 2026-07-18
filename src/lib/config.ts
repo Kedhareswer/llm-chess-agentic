@@ -57,3 +57,11 @@ export const POLLING_INTERVALS = {
   AUTO_TICK_MS: 5_000, // Ticks that land mid-processing return instantly (claim is held), so this is cheap
   WHEN_TAB_HIDDEN_MS: 30_000,
 } as const;
+
+/**
+ * How long each move is shown before the board advances to the next one.
+ * The server plays moves in bursts; the client plays them back one at a time at
+ * this cadence so pieces glide instead of teleporting. Only paces catch-up — a
+ * live game that is keeping up moves at the AI's own (slower) speed.
+ */
+export const MOVE_PLAYBACK_MS = 900;

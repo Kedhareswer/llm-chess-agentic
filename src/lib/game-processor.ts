@@ -20,7 +20,7 @@ const PROCESSING_TIMEOUT_MS = 120_000;
 
 type PlyOutcome = "moved" | "stop";
 
-export async function processGame(game: Game): Promise<void> {
+export async function processGame(game: Game, budgetMs: number = GAME_RULES.TICK_BUDGET_MS): Promise<void> {
   // Atomically claim the game before processing. This is the serverless-safe
   // replacement for an in-memory lock (a module-level Map gives no protection
   // across instances/tabs). Only one caller can flip processing false->true for
@@ -49,10 +49,11 @@ export async function processGame(game: Game): Promise<void> {
     return;
   }
 
-  // Play plies back-to-back until the game ends, a move fails, or the tick
-  // budget is spent — a full game takes a handful of ticks instead of one ply
-  // per 8-second browser tick.
-  const deadline = Date.now() + GAME_RULES.TICK_BUDGET_MS;
+  // Play plies back-to-back until the game ends, a move fails, or the budget is
+  // spent — a full game takes a handful of ticks instead of one ply per tick.
+  // The start route passes budgetMs=0 to play exactly one opening move quickly
+  // (so the request returns fast) and lets the auto-ticks drive the rest.
+  const deadline = Date.now() + budgetMs;
   let ownsClaim = true;
   try {
     while (true) {

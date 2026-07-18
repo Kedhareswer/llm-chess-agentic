@@ -102,7 +102,9 @@ export async function POST(request: Request) {
     const [createdGame] = await db.select().from(games).where(eq(games.id, result.gameId));
     if (createdGame) {
       try {
-        await processGame(createdGame);
+        // Play only the first move here so the request returns quickly (and any
+        // bad-key failure surfaces now). The browser auto-ticks drive the rest.
+        await processGame(createdGame, 0);
       } catch (e) {
         console.error("processGame after start failed", e);
       }
