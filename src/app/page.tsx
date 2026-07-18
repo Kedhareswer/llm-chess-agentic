@@ -180,6 +180,11 @@ export default function Home() {
       return;
     }
 
+    if (whiteModelId === blackModelId) {
+      setStartError("Pick two different models — a model can't play against itself.");
+      return;
+    }
+
     // Bring-your-own-key: keys live only in this browser (Settings modal writes
     // them to localStorage) and are sent with this match's start request.
     const needsGroq = whiteModel.provider === "groq" || blackModel.provider === "groq";
@@ -360,12 +365,13 @@ export default function Home() {
   }, [gameData?.game?.fen, gameData?.moves?.length, previousFen, previousMoveCount, viewPosition, sounds]);
   const isActive = gameState === "active";
 
-  // Clear error when both models are selected (but not API key errors)
+  // Clear any start error when the user changes a selection (a fresh attempt).
+  // NOTE: startError must NOT be in the deps — it previously was, which cleared
+  // real start failures the instant they were set, so the user saw nothing.
   useEffect(() => {
-    if (whiteModelId && blackModelId && startError && !startError.includes("API key")) {
-      setStartError(null);
-    }
-  }, [whiteModelId, blackModelId, startError]);
+    setStartError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [whiteModelId, blackModelId, whiteMode, blackMode]);
 
   // Get mode names for display
   const whiteModeData = SKILL_MODES.find(m => m.id === whiteMode);

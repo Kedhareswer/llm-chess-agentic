@@ -1,6 +1,6 @@
 import { db } from "@/db";
 import { games, moves, models } from "@/db/schema";
-import { eq, desc, and, or, lt, isNull } from "drizzle-orm";
+import { eq, desc, and, or, lt, isNull, like, sql } from "drizzle-orm";
 import { validateMove, applyMove, getLegalMoves, getTurn, isGameOver, getGameResult, getGameEndReason, getMoveNumber } from "./chess";
 import { requestMove } from "./ai";
 import { scoreMoves, type ScoredMove } from "./engine";
@@ -118,17 +118,19 @@ async function playOnePly(gameId: string): Promise<PlyOutcome> {
   const color: "white" | "black" = turn === "w" ? "white" : "black";
   const mode = (turn === "w" ? currentGame.whiteMode : currentGame.blackMode) as SkillMode;
 
-  // Check if required API key is available before attempting move
+  // Check if required API key is available before attempting move. A missing or
+  // bad key is a setup failure, not a game result — abort (delete) rather than
+  // recording a bogus draw that would pollute the leaderboard.
   const isGroq = modelId.startsWith("groq/");
   const isGoogle = modelId.startsWith("google/");
   if (isGroq && !groqApiKey) {
-    console.error(`[processGame] Missing Groq API key for ${modelId}, ending game`);
-    await endGame(currentGame, "1/2-1/2", `Match cancelled: Missing Groq API key`);
+    console.error(`[processGame] Missing Groq API key for ${modelId}, aborting game`);
+    await abortGame(currentGame);
     return "stop";
   }
   if (isGoogle && !geminiApiKey) {
-    console.error(`[processGame] Missing Gemini API key for ${modelId}, ending game`);
-    await endGame(currentGame, "1/2-1/2", `Match cancelled: Missing Gemini API key`);
+    console.error(`[processGame] Missing Gemini API key for ${modelId}, aborting game`);
+    await abortGame(currentGame);
     return "stop";
   }
 
@@ -166,9 +168,20 @@ async function playOnePly(gameId: string): Promise<PlyOutcome> {
   } catch (err) {
     console.error(`[processGame] Move request failed for ${modelId}:`, err);
 
-    // Fatal errors end the game immediately.
+    // API-key / rate-limit failures are setup problems, not chess results. If the
+    // game hasn't produced a real move yet, delete it so it never appears on the
+    // board or the leaderboard. If it failed mid-game (key revoked partway), end
+    // it as a draw so the played moves aren't lost.
     if (err instanceof APIKeyError || err instanceof RateLimitError) {
-      await endGame(currentGame, "1/2-1/2", `Match cancelled: ${err.message}`);
+      const [{ played }] = await db
+        .select({ played: sql<number>`count(*)::int` })
+        .from(moves)
+        .where(eq(moves.gameId, currentGame.id));
+      if (played === 0) {
+        await abortGame(currentGame);
+      } else {
+        await endGame(currentGame, "1/2-1/2", `Match cancelled: ${err.message}`);
+      }
       return "stop";
     }
 
@@ -465,6 +478,45 @@ async function judgeMoveForTurn(
   }
 
   throw new Error(`Judge failed: ${modelId} did not produce a legal move after ${GAME_RULES.MAX_JUDGE_ATTEMPTS} attempts`);
+}
+
+/**
+ * Deletes a game and any moves it produced, leaving no trace. Used when a match
+ * cannot start (missing/invalid API key) — such attempts must never persist as
+ * games or count toward any model's record.
+ */
+async function abortGame(game: Game): Promise<void> {
+  await db.delete(moves).where(eq(moves.gameId, game.id));
+  await db.delete(games).where(eq(games.id, game.id));
+}
+
+/**
+ * Removes matches that were previously cancelled before any real play (bad or
+ * missing API key) and undoes the draw they wrongly recorded. Self-heals a DB
+ * that accumulated these before abortGame existed. Returns how many were purged.
+ */
+export async function purgeFailedGames(): Promise<number> {
+  const failed = await db
+    .select({ id: games.id, whiteId: games.whiteId, blackId: games.blackId })
+    .from(games)
+    .where(and(eq(games.status, "complete"), like(games.resultReason, "Match cancelled%")));
+
+  for (const g of failed) {
+    await db.delete(moves).where(eq(moves.gameId, g.id));
+    await db.delete(games).where(eq(games.id, g.id));
+    // Undo the bogus draw these recorded. ELO for a draw between equal ratings
+    // is ~unchanged, so only the games-played / draws counters need reverting.
+    for (const modelId of new Set([g.whiteId, g.blackId])) {
+      await db
+        .update(models)
+        .set({
+          gamesPlayed: sql`GREATEST(0, ${models.gamesPlayed} - 1)`,
+          draws: sql`GREATEST(0, ${models.draws} - 1)`,
+        })
+        .where(eq(models.id, modelId));
+    }
+  }
+  return failed.length;
 }
 
 async function forfeitGame(game: Game, forfeitingModelId: string, reason: string): Promise<void> {

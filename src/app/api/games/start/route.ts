@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { games, models, tournament } from "@/db/schema";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { processGame } from "@/lib/game-processor";
+import { processGame, purgeFailedGames } from "@/lib/game-processor";
+import { getGroqApiKey, getGeminiApiKey } from "@/lib/api-key-store";
 import { randomUUID } from "crypto";
 import { StartGameRequestSchema } from "@/types/api";
 import { encryptSecret } from "@/lib/crypto";
@@ -24,6 +25,21 @@ export async function POST(request: Request) {
   if (uniqueIds.length < 1 || modelIds.length < 2) {
     return NextResponse.json({ error: "Select models for both sides" }, { status: 400 });
   }
+
+  // Fail fast if a required key is absent, BEFORE creating a game row — so a
+  // missing key never leaves a phantom match in the DB. A key counts if it was
+  // sent with this request (bring-your-own-key) or configured in the env.
+  const needsGroq = modelIds.some((id) => id.startsWith("groq/"));
+  const needsGemini = modelIds.some((id) => id.startsWith("google/"));
+  if (needsGroq && !(groqApiKey?.trim() || (await getGroqApiKey()))) {
+    return NextResponse.json({ error: "A Groq API key is required for the selected models. Add it in Settings." }, { status: 400 });
+  }
+  if (needsGemini && !(geminiApiKey?.trim() || (await getGeminiApiKey()))) {
+    return NextResponse.json({ error: "A Gemini API key is required for the selected models. Add it in Settings." }, { status: 400 });
+  }
+
+  // Self-heal: clear out any matches that were cancelled before real play.
+  await purgeFailedGames().catch(() => {});
 
   // Use transaction to prevent race condition
   try {
@@ -82,7 +98,7 @@ export async function POST(request: Request) {
       return { gameId, white: white.id, black: black.id };
     });
 
-    // Kick off first move outside transaction to avoid holding locks
+    // Kick off first move outside transaction to avoid holding locks.
     const [createdGame] = await db.select().from(games).where(eq(games.id, result.gameId));
     if (createdGame) {
       try {
@@ -90,6 +106,17 @@ export async function POST(request: Request) {
       } catch (e) {
         console.error("processGame after start failed", e);
       }
+    }
+
+    // If the first move aborted the game (a bad/rejected API key deletes it via
+    // abortGame), report that synchronously instead of returning a dead gameId
+    // the client would poll forever.
+    const [stillThere] = await db.select({ id: games.id }).from(games).where(eq(games.id, result.gameId));
+    if (!stillThere) {
+      return NextResponse.json(
+        { error: "The match could not start — the AI provider rejected the request. Check that your API key is valid." },
+        { status: 400 }
+      );
     }
 
     // Ensure tournament running
