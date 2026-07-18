@@ -63,7 +63,7 @@ describe('POST /api/games/start', () => {
     const data = await response.json();
 
     expect(response.status).toBe(400);
-    expect(data.error).toBe('Select at least two models');
+    expect(data.error).toBe('At least two models required');
   });
 
   it('should handle malformed request body', async () => {
@@ -77,7 +77,7 @@ describe('POST /api/games/start', () => {
     const data = await response.json();
 
     expect(response.status).toBe(400);
-    expect(data.error).toBe('Select at least two models');
+    expect(data.error).toBe('Invalid input: expected object, received null');
   });
 
   it.skipIf(!hasDatabase)('should create a game successfully with valid models', async () => {
