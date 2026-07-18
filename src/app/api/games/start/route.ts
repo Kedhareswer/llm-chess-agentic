@@ -19,7 +19,7 @@ export async function POST(request: Request) {
     );
   }
   
-  const { modelIds, groqApiKey, geminiApiKey } = validation.data;
+  const { modelIds, groqApiKey, geminiApiKey, whiteMode, blackMode } = validation.data;
   const uniqueIds = Array.from(new Set(modelIds)).filter(Boolean);
   if (uniqueIds.length < 1 || modelIds.length < 2) {
     return NextResponse.json({ error: "Select models for both sides" }, { status: 400 });
@@ -73,6 +73,8 @@ export async function POST(request: Request) {
         blackId: black.id,
         status: "active",
         startedAt: new Date(),
+        whiteMode: whiteMode ?? "scholar",
+        blackMode: blackMode ?? "scholar",
         groqApiKey: groqApiKey?.trim() ? encryptSecret(groqApiKey.trim()) : null,
         geminiApiKey: geminiApiKey?.trim() ? encryptSecret(geminiApiKey.trim()) : null,
       });

@@ -31,6 +31,10 @@ export const games = pgTable("games", {
   endedAt: timestamp("ended_at"),
   whiteTimeoutWarnings: integer("white_timeout_warnings").notNull().default(0),
   blackTimeoutWarnings: integer("black_timeout_warnings").notNull().default(0),
+  // Skill mode per side (novice..grandmaster) — drives temperature, candidate
+  // filtering and the blunder guard in the game processor.
+  whiteMode: text("white_mode").notNull().default("scholar"),
+  blackMode: text("black_mode").notNull().default("scholar"),
   groqApiKey: text("groq_api_key"), // API key for Groq models in this game
   geminiApiKey: text("gemini_api_key"), // API key for Gemini models in this game
   // Serverless-safe processing claim: a game is claimed atomically before a tick
@@ -87,6 +91,9 @@ export const publicGameColumns = {
   endedAt: games.endedAt,
   whiteTimeoutWarnings: games.whiteTimeoutWarnings,
   blackTimeoutWarnings: games.blackTimeoutWarnings,
+  whiteMode: games.whiteMode,
+  blackMode: games.blackMode,
+  analyzed: games.analyzed,
 };
 
 export type Model = typeof models.$inferSelect;

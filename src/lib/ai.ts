@@ -2,9 +2,12 @@ import { streamText, generateText, createGateway } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createAnthropic } from "@ai-sdk/anthropic";
+import { Chess } from "chess.js";
 import { z } from "zod";
 import { APIKeyError, RateLimitError, TimeoutError, ParseError } from "./errors";
 import { AI_TIMEOUTS } from "./config";
+import { modeConfig, type SkillMode } from "./modes";
+import { MATE_SCORE, type ScoredMove } from "./engine";
 
 // Timeout constants - adjusted for each provider's typical response times
 // Non-streaming is simpler and more reliable for short JSON responses
@@ -44,7 +47,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
  * @param timeoutMs - The timeout in milliseconds
  * @returns The complete response text from the model
  */
-async function callGroqNonStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number): Promise<string> {
+async function callGroqNonStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number, temperature: number): Promise<string> {
   const groq = createOpenAI({
     baseURL: "https://api.groq.com/openai/v1",
     apiKey,
@@ -53,8 +56,8 @@ async function callGroqNonStreaming(model: string, prompt: string, apiKey: strin
   const textPromise = generateText({
     model: groq(model),
     prompt,
-    temperature: 0.5,
-    maxOutputTokens: 200,
+    temperature,
+    maxOutputTokens: 400,
   }).then((result) => result.text);
 
   return withTimeout(textPromise, timeoutMs, `Groq request for ${model}`);
@@ -70,18 +73,19 @@ async function callGroqNonStreaming(model: string, prompt: string, apiKey: strin
  * @param timeoutMs - The timeout in milliseconds
  * @returns The complete response text from the model
  */
-async function callGeminiNonStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number): Promise<string> {
+async function callGeminiNonStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number, temperature: number): Promise<string> {
   const google = createGoogleGenerativeAI({ apiKey });
-  
-  // Limit maxTokens to speed up generation and prevent overly long responses
-  // Chess moves are short (e.g., "e4", "Nf3"), so 200 tokens is more than enough
+
+  // Gemini 2.5 models spend "thinking" tokens from the output budget; a tight
+  // cap starves them into empty responses (which then parse-fail and burn
+  // judge retries), so give them plenty of headroom.
   const textPromise = generateText({
     model: google(model),
     prompt,
-    temperature: 0.5,
-    maxOutputTokens: 200, // Limit response size for faster generation
+    temperature,
+    maxOutputTokens: 4096,
   }).then(result => result.text);
-  
+
   return withTimeout(textPromise, timeoutMs, `Gemini request for ${model}`);
 }
 
@@ -94,14 +98,14 @@ async function callGeminiNonStreaming(model: string, prompt: string, apiKey: str
  * @param timeoutMs - The timeout in milliseconds
  * @returns The complete response text from the model
  */
-async function callAnthropicNonStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number): Promise<string> {
+async function callAnthropicNonStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number, temperature: number): Promise<string> {
   const anthropic = createAnthropic({ apiKey });
 
   const textPromise = generateText({
     model: anthropic(model),
     prompt,
-    temperature: 0.5,
-    maxOutputTokens: 200,
+    temperature,
+    maxOutputTokens: 400,
   }).then((result) => result.text);
 
   return withTimeout(textPromise, timeoutMs, `Anthropic request for ${model}`);
@@ -117,14 +121,14 @@ async function callAnthropicNonStreaming(model: string, prompt: string, apiKey: 
  * @param timeoutMs - The timeout in milliseconds
  * @returns The complete response text from the model
  */
-async function callOpenAINonStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number): Promise<string> {
+async function callOpenAINonStreaming(model: string, prompt: string, apiKey: string, timeoutMs: number, temperature: number): Promise<string> {
   const openai = createOpenAI({ apiKey });
 
   const textPromise = generateText({
     model: openai(model),
     prompt,
-    temperature: 0.5,
-    maxOutputTokens: 200,
+    temperature,
+    maxOutputTokens: 400,
   }).then((result) => result.text);
 
   return withTimeout(textPromise, timeoutMs, `OpenAI request for ${model}`);
@@ -157,6 +161,12 @@ interface PromptParams {
   lastMoves: string[];
   lastMovesWithColor?: Array<{ move: string; color: "white" | "black" }>;
   errorContext?: string;
+  /** Skill mode — sets persona, temperature and candidate filtering. */
+  mode?: SkillMode;
+  /** Full PGN so the model sees the numbered game history, not just a window. */
+  pgn?: string;
+  /** Engine-scored legal moves, best first (see engine.ts). */
+  candidates?: ScoredMove[];
 }
 
 /**
@@ -165,79 +175,65 @@ interface PromptParams {
  * @param params - The parameters for building the prompt
  * @returns A formatted string prompt for the AI model
  */
-export function buildPrompt(params: PromptParams): string {
-  const { fen, color, legalMoves, lastMoves, lastMovesWithColor, errorContext } = params;
+/** Formats an engine score for the prompt, e.g. "+1.3", "-0.5", "mate". */
+function formatScore(score: number): string {
+  if (score >= MATE_SCORE) return "mate";
+  if (score <= -MATE_SCORE) return "gets mated";
+  const pawns = score / 100;
+  return `${pawns >= 0 ? "+" : ""}${pawns.toFixed(1)}`;
+}
 
-  // Detect repetition patterns - only check moves made by THIS player
-  const myRecentMoves = lastMovesWithColor 
-    ? lastMovesWithColor
-        .filter(m => m.color === color)
-        .map(m => m.move)
-        .slice(-6)
-    : lastMoves.slice(-6); // Fallback if color info not available
-  
-  let repetitionWarning = "";
-  let pieceRepetition = "";
-  
-  if (myRecentMoves.length >= 4) {
-    const lastFewMoves = myRecentMoves.slice(-4);
-    
-    // Check for A-B-A-B pattern
-    if (lastFewMoves.length >= 4 &&
-        lastFewMoves[0] === lastFewMoves[2] &&
-        lastFewMoves[1] === lastFewMoves[3]) {
-      repetitionWarning = "\n\n⚠️ CRITICAL: You are repeating moves! This is poor chess. Vary your play - use different pieces, develop new pieces, create threats. Do NOT repeat the same move pattern.";
-    }
-    // Check if same move repeated
-    else if (lastFewMoves[lastFewMoves.length - 1] === lastFewMoves[lastFewMoves.length - 2]) {
-      repetitionWarning = "\n\n⚠️ CRITICAL: You just repeated a move! This is weak play. Use a DIFFERENT piece. Develop undeveloped pieces. Create new threats.";
-    }
-    
-    // Detect if same piece type is being moved repeatedly
-    const piecePatterns = myRecentMoves.slice(-4).map(move => {
-      if (move.startsWith("O-")) return "K"; // Castling
-      if (/^[KQRBN]/.test(move)) return move[0];
-      return "P"; // Pawn move
-    });
-    
-    if (piecePatterns.length >= 3 && piecePatterns.every(p => p === piecePatterns[piecePatterns.length - 1])) {
-      const pieceName = piecePatterns[0] === "K" ? "king" : piecePatterns[0] === "Q" ? "queen" : piecePatterns[0] === "R" ? "rook" : piecePatterns[0] === "B" ? "bishop" : piecePatterns[0] === "N" ? "knight" : "pawn";
-      pieceRepetition = `\n\n⚠️ WARNING: You are moving the same type of piece (${pieceName}) repeatedly! This is weak play. Develop ALL your pieces - use your rooks, bishops, knights, and queen. Coordinate your entire army, not just one or two pieces.`;
+export function buildPrompt(params: PromptParams): string {
+  const { fen, color, legalMoves, errorContext, mode, pgn, candidates } = params;
+  const cfg = modeConfig(mode);
+
+  const chess = new Chess(fen);
+  const board = chess.ascii();
+
+  // Material balance from the FEN — LLMs are bad at deriving this themselves.
+  const values: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+  let white = 0, black = 0;
+  for (const row of chess.board()) {
+    for (const sq of row) {
+      if (!sq) continue;
+      if (sq.color === "w") white += values[sq.type];
+      else black += values[sq.type];
     }
   }
+  const diff = white - black;
+  const materialLine = `Material: White ${white} vs Black ${black}${diff === 0 ? " (even)" : ` (${diff > 0 ? "White" : "Black"} up ${Math.abs(diff)})`}`;
 
-  let prompt = `You are playing chess as ${color} against another AI model. Play strong, diverse chess using ALL your pieces.
+  const history = pgn?.trim()
+    ? `Game so far: ${pgn.trim()}`
+    : "This is the first move of the game.";
 
-Current position (FEN): ${fen}
-${lastMoves.length > 0 ? `Recent moves: ${lastMoves.join(", ")}` : "This is the first move."}
+  // Strong modes choose among engine-screened candidates; others get the full
+  // legal list. Either way the model must pick from the list shown.
+  let movesBlock: string;
+  if (cfg.candidateLimit && candidates && candidates.length > 0) {
+    const top = candidates.slice(0, cfg.candidateLimit);
+    movesBlock = `Choose EXACTLY ONE of these candidate moves (best first; the score is your material outcome after the opponent's best reply):
+${top.map(c => `${c.move} (${formatScore(c.score)})`).join(", ")}`;
+  } else {
+    movesBlock = `You MUST choose EXACTLY ONE move from this list of legal moves:
+${legalMoves.join(", ")}`;
+  }
 
-CRITICAL: You MUST choose ONE move from this exact list of legal moves:
-${legalMoves.join(", ")}
+  return `${cfg.persona} You are playing chess as ${color} against another AI.
 
-${errorContext ? `IMPORTANT: ${errorContext}\n\n` : ""}${repetitionWarning}${pieceRepetition}
+Board (uppercase = White, lowercase = Black), ${color} to move:
+${board}
+FEN: ${fen}
+${materialLine}
+${history}
 
-STRATEGIC GUIDELINES - Follow these principles:
-1. **Use ALL your pieces**: Develop rooks, bishops, knights, and queen. Don't rely on just one or two pieces.
-2. **Avoid repetition**: Do NOT repeat moves unnecessarily. If you just moved a piece, consider moving a different piece next.
-3. **Piece development**: Get all pieces into active positions. Undeveloped pieces are wasted resources.
-4. **Coordinate your army**: Work with multiple pieces together, not in isolation.
-5. **Create threats**: Use different pieces to create various threats - don't tunnel vision on one idea.
-6. **Material balance**: Consider exchanges and material value.
-7. **King safety**: Keep your king safe, especially in the middlegame.
-8. **Pawn structure**: Maintain healthy pawn structure and avoid weaknesses.
-9. **Control the center**: Centralize your pieces when possible.
-10. **Think ahead**: Consider your opponent's responses and plan multiple moves ahead.
+${movesBlock}
 
-${repetitionWarning || pieceRepetition ? "REMEMBER: Strong chess requires using your entire army, not repeating moves with the same pieces!" : ""}
+${errorContext ? `IMPORTANT: ${errorContext}\n\n` : ""}Before choosing, check: (1) is any of your pieces hanging or about to be captured? (2) can you capture material or give a strong check? (3) what did your opponent's last move threaten?
 
-RESPONSE FORMAT - You must respond with ONLY this JSON format:
-{"move": "e4", "reasoning": "brief explanation"}
-
-The "move" field MUST be EXACTLY one of the legal moves listed above (e.g., "e4", "Nf3", "O-O").
-Do NOT use numbers alone like "4" - use proper chess notation like "e4".
+Respond with ONLY this JSON: {"move": "e4", "reasoning": "one concise sentence"}
+The "move" value MUST be EXACTLY one item from the list above (e.g. "Nf3", "O-O").
 Do NOT add any text before or after the JSON.`;
-
-  return prompt;
 }
 
 /**
@@ -372,6 +368,7 @@ export async function requestMove(
   options?: { groqApiKey?: string; geminiApiKey?: string; anthropicApiKey?: string; openaiApiKey?: string }
 ): Promise<MoveResponse> {
   const prompt = buildPrompt(params);
+  const { temperature } = modeConfig(params.mode);
   const isGroq = modelId.startsWith("groq/");
   const isGoogle = modelId.startsWith("google/");
   const isAnthropic = modelId.startsWith("anthropic/");
@@ -424,23 +421,23 @@ export async function requestMove(
       
       if (isGroq && groqApiKey) {
         // Use non-streaming Groq API (simpler and more reliable)
-        text = await callGroqNonStreaming(groqModel!, prompt, groqApiKey, AI_TIMEOUTS.GROQ_MS);
+        text = await callGroqNonStreaming(groqModel!, prompt, groqApiKey, AI_TIMEOUTS.GROQ_MS, temperature);
       } else if (isGoogle && geminiApiKey) {
         // Use non-streaming Gemini API (more reliable for short JSON responses)
-        text = await callGeminiNonStreaming(googleModel!, prompt, geminiApiKey, AI_TIMEOUTS.GEMINI_MS);
+        text = await callGeminiNonStreaming(googleModel!, prompt, geminiApiKey, AI_TIMEOUTS.GEMINI_MS, temperature);
       } else if (isAnthropic && anthropicApiKey) {
         // Use non-streaming Anthropic (Claude) API
-        text = await callAnthropicNonStreaming(anthropicModel!, prompt, anthropicApiKey, AI_TIMEOUTS.ANTHROPIC_MS);
+        text = await callAnthropicNonStreaming(anthropicModel!, prompt, anthropicApiKey, AI_TIMEOUTS.ANTHROPIC_MS, temperature);
       } else if (isOpenAI && openaiApiKey) {
         // Use non-streaming OpenAI (direct) API
-        text = await callOpenAINonStreaming(openaiModel!, prompt, openaiApiKey, AI_TIMEOUTS.OPENAI_MS);
+        text = await callOpenAINonStreaming(openaiModel!, prompt, openaiApiKey, AI_TIMEOUTS.OPENAI_MS, temperature);
       } else {
         // Use AI Gateway for other providers (non-streaming fallback)
         const streamPromise = (async () => {
           const result = streamText({
             model: gateway(modelId),
             prompt,
-            temperature: 0.5,
+            temperature,
           });
           let fullText = "";
           for await (const chunk of (await result).textStream) {

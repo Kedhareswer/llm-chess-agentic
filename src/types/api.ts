@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Game, Model, Move } from "@/db/schema";
+import { SkillModeSchema } from "@/lib/modes";
 
 // Shared enum schema for the `?status=` query param, matching the DB enum.
 export const GameStatusSchema = z.enum(["active", "complete"]);
@@ -11,8 +12,8 @@ export const StartGameRequestSchema = z
     modelIds: z.array(z.string()).min(2, "At least two models required"),
     groqApiKey: z.string().optional(), // Optional API key for Groq models
     geminiApiKey: z.string().optional(), // Optional API key for Gemini models
-    whiteMode: z.string().optional(), // Optional skill mode for white player
-    blackMode: z.string().optional(), // Optional skill mode for black player
+    whiteMode: SkillModeSchema.optional(), // Skill mode for white player
+    blackMode: SkillModeSchema.optional(), // Skill mode for black player
   })
   .refine((data) => data.modelIds[0] !== data.modelIds[1], {
     message: "A model cannot play against itself; pick two different models",

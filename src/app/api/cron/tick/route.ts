@@ -4,6 +4,10 @@ import { tournament, games } from "@/db/schema";
 import { eq, sql } from "drizzle-orm";
 import { processGame } from "@/lib/game-processor";
 
+// The tick loops moves within GAME_RULES.TICK_BUDGET_MS (25s) plus one
+// in-flight ply, so give the function generous headroom on Vercel.
+export const maxDuration = 60;
+
 async function handleTick(request: Request) {
   // NOTE: intentionally unauthenticated. There is no server cron (vercel.json is
   // empty) — the browser UI is the only tick driver, so gating this behind

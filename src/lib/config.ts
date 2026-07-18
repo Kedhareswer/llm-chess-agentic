@@ -24,6 +24,11 @@ export const GAME_RULES = {
   MAX_JUDGE_ATTEMPTS: 3,
   MAX_TIMEOUT_WARNINGS: 2,
   GAME_TIME_LIMIT_MS: 25 * 60 * 1000,
+  // One tick invocation keeps playing moves back-to-back until this budget is
+  // spent (plus at most one in-flight ply), so a full game takes a handful of
+  // ticks instead of one ply per browser tick. Keep below the route's
+  // maxDuration (60s on Vercel) with headroom for a slow final ply.
+  TICK_BUDGET_MS: 25_000,
 } as const;
 
 /**
@@ -49,6 +54,6 @@ export const POLLING_INTERVALS = {
   GAME_REFRESH_MS: 1_000, // Active game: poll every 1s to catch moves quickly and avoid batching
   GAMES_LIST_REFRESH_MS: 15_000,
   COMPLETED_GAME_REFRESH_MS: 60_000,
-  AUTO_TICK_MS: 8_000,
+  AUTO_TICK_MS: 5_000, // Ticks that land mid-processing return instantly (claim is held), so this is cheap
   WHEN_TAB_HIDDEN_MS: 30_000,
 } as const;

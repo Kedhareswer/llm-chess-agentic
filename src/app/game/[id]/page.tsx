@@ -7,6 +7,7 @@ import { ReasoningPanel } from "@/components/reasoning-panel";
 import { EvalBar } from "@/components/eval-bar";
 import type { Game, Move, Model } from "@/db/schema";
 import { formatElapsed } from "@/lib/utils";
+import { POLLING_INTERVALS } from "@/lib/config";
 import { useDebouncedCallback } from "@/hooks/use-debounced-callback";
 import { useGameData } from "@/hooks/use-game-data";
 import { useChessSounds } from "@/hooks/use-chess-sounds";
@@ -130,6 +131,16 @@ export default function GamePage() {
       }
     }
   }, [data?.game?.startedAt, data?.game?.status, data?.game?.endedAt]);
+
+  // Auto-tick while the game is active — previously this page never ticked, so
+  // watching a game from here alone stalled it (the home page was the only driver).
+  useEffect(() => {
+    if (data?.game?.status !== "active") return;
+    const timer = setInterval(() => {
+      fetch("/api/cron/tick").catch(() => {});
+    }, POLLING_INTERVALS.AUTO_TICK_MS);
+    return () => clearInterval(timer);
+  }, [data?.game?.status]);
 
   const handleTickOnce = useDebouncedCallback(async () => {
     setTickInfo(null);
