@@ -33,6 +33,7 @@ function evaluateFen(worker: Worker, fen: string, depth: number): Promise<number
   return new Promise((resolve) => {
     let lastCp = 0;
     let settled = false;
+    let timer: ReturnType<typeof setTimeout>;
     const isBlackToMove = fen.split(" ")[1] === "b";
 
     const finish = () => {
@@ -55,11 +56,26 @@ function evaluateFen(worker: Worker, fen: string, depth: number): Promise<number
       if (line.startsWith("bestmove")) finish();
     };
 
-    const timer = setTimeout(finish, PER_POSITION_TIMEOUT_MS);
-    worker.addEventListener("message", onMessage);
+    const start = () => {
+      timer = setTimeout(finish, PER_POSITION_TIMEOUT_MS);
+      worker.addEventListener("message", onMessage);
+      worker.postMessage(`position fen ${fen}`);
+      worker.postMessage(`go depth ${depth}`);
+    };
+
+    // Synchronize before searching: if a previous search is still running (e.g.
+    // the prior evaluateFen resolved via its timeout), "stop" flushes it and its
+    // stale bestmove/info lines land BEFORE "readyok" — so a listener attached
+    // after readyok can never consume the old search's output.
+    const onReady = (e: MessageEvent) => {
+      if (e.data === "readyok") {
+        worker.removeEventListener("message", onReady);
+        start();
+      }
+    };
+    worker.addEventListener("message", onReady);
     worker.postMessage("stop");
-    worker.postMessage(`position fen ${fen}`);
-    worker.postMessage(`go depth ${depth}`);
+    worker.postMessage("isready");
   });
 }
 
@@ -87,6 +103,7 @@ export function useGameAnalysis(
     startedForGame.current = game.id;
 
     let cancelled = false;
+    let completed = false;
     let worker: Worker | null = null;
 
     (async () => {
@@ -112,6 +129,7 @@ export function useGameAnalysis(
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
+        if (res.ok) completed = true;
         if (res.ok && !cancelled) onComplete?.();
       } catch (err) {
         console.error("[useGameAnalysis] failed:", err);
@@ -125,6 +143,9 @@ export function useGameAnalysis(
     return () => {
       cancelled = true;
       worker?.terminate();
+      // If this run was cancelled before finishing (e.g. StrictMode's
+      // mount-cleanup-remount in dev), let the next mount start over.
+      if (!completed) startedForGame.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eligible, game?.id, moves?.length]);

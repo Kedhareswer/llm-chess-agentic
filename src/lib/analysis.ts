@@ -2,7 +2,7 @@
  * Post-game analysis math: turns a sequence of Stockfish evaluations into
  * per-move centipawn loss and accuracy, and aggregates them into per-model
  * benchmark stats. Pure and engine-agnostic so it can be fully unit-tested;
- * the actual engine runs in the browser (see lib/stockfish-analysis.ts).
+ * the actual engine runs in the browser (see src/hooks/use-game-analysis.ts).
  */
 
 /** Evals beyond this magnitude are clamped for loss/blunder purposes ("winning is winning"). */

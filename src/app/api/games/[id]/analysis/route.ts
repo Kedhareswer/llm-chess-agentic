@@ -7,10 +7,13 @@ import { analyzeGame, type Color } from "@/lib/analysis";
 
 // Body: the start-position eval plus the White-perspective eval of the position
 // after every ply, keyed by move id. Produced client-side by the Stockfish worker.
+// Evals are bounded to the client's own mate score (±100000) so a hostile
+// caller can't overflow the int4 columns or poison stats with absurd values.
+const EvalCp = z.number().int().min(-100_000).max(100_000);
 const AnalysisSchema = z.object({
-  startEvalCp: z.number().finite(),
+  startEvalCp: EvalCp,
   evals: z
-    .array(z.object({ moveId: z.string().uuid(), evalCp: z.number().finite() }))
+    .array(z.object({ moveId: z.string().uuid(), evalCp: EvalCp }))
     .min(1, "At least one move eval is required"),
 });
 
@@ -44,7 +47,10 @@ export async function POST(
     .select({ id: moves.id, color: moves.color })
     .from(moves)
     .where(eq(moves.gameId, id))
-    .orderBy(asc(moves.createdAt), asc(moves.moveNumber));
+    // moveNumber first: the FEN fullmove number is shared by both plies of a
+    // pair, and createdAt only breaks the white/black tie within it. The other
+    // way round, a createdAt tie could swap ply order across pairs.
+    .orderBy(asc(moves.moveNumber), asc(moves.createdAt));
 
   if (gameMoves.length === 0) {
     return NextResponse.json({ error: "Game has no moves to analyze" }, { status: 400 });
