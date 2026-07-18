@@ -11,23 +11,17 @@ interface SettingsModalProps {
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [groqKey, setGroqKey] = useState("");
   const [geminiKey, setGeminiKey] = useState("");
-  const [groqSaving, setGroqSaving] = useState(false);
-  const [geminiSaving, setGeminiSaving] = useState(false);
   const [groqMessage, setGroqMessage] = useState<{ text: string; isError: boolean } | null>(null);
   const [geminiMessage, setGeminiMessage] = useState<{ text: string; isError: boolean } | null>(null);
-  const [adminToken, setAdminToken] = useState("");
   const modalRef = useRef<HTMLDivElement>(null);
 
-  // Admin token is required by the key-update endpoints when ADMIN_TOKEN is set
-  // on the server. Kept in localStorage so it survives reloads.
+  // Keys are yours: kept only in this browser (localStorage) and sent with each
+  // match you start. Never stored on the server as a shared global key.
   useEffect(() => {
-    setAdminToken(localStorage.getItem("adminToken") || "");
-  }, []);
+    setGroqKey(localStorage.getItem("groqApiKey") || "");
+    setGeminiKey(localStorage.getItem("geminiApiKey") || "");
+  }, [isOpen]);
 
-  function authHeaders(): Record<string, string> {
-    return adminToken ? { Authorization: `Bearer ${adminToken}` } : {};
-  }
-  
   const { getSettings, updateSettings, sounds } = useChessSounds();
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [soundVolume, setSoundVolume] = useState(0.5);
@@ -73,50 +67,18 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     };
   }, [isOpen]);
 
-  async function handleSaveGroqKey() {
-    setGroqSaving(true);
-    setGroqMessage(null);
-    try {
-      const res = await fetch("/api/tournament/groq-key", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ key: groqKey }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || "Failed to save Groq key");
-      }
-      setGroqMessage({ text: "Groq API key saved successfully", isError: false });
-      setGroqKey("");
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Failed to save Groq key";
-      setGroqMessage({ text: message, isError: true });
-    } finally {
-      setGroqSaving(false);
-    }
+  function handleSaveGroqKey() {
+    const trimmed = groqKey.trim();
+    if (trimmed) localStorage.setItem("groqApiKey", trimmed);
+    else localStorage.removeItem("groqApiKey");
+    setGroqMessage({ text: trimmed ? "Groq API key saved in this browser" : "Groq API key cleared", isError: false });
   }
 
-  async function handleSaveGeminiKey() {
-    setGeminiSaving(true);
-    setGeminiMessage(null);
-    try {
-      const res = await fetch("/api/tournament/gemini-key", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ key: geminiKey }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || "Failed to save Gemini key");
-      }
-      setGeminiMessage({ text: "Gemini API key saved successfully", isError: false });
-      setGeminiKey("");
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Failed to save Gemini key";
-      setGeminiMessage({ text: message, isError: true });
-    } finally {
-      setGeminiSaving(false);
-    }
+  function handleSaveGeminiKey() {
+    const trimmed = geminiKey.trim();
+    if (trimmed) localStorage.setItem("geminiApiKey", trimmed);
+    else localStorage.removeItem("geminiApiKey");
+    setGeminiMessage({ text: trimmed ? "Gemini API key saved in this browser" : "Gemini API key cleared", isError: false });
   }
 
   if (!isOpen) return null;
@@ -177,10 +139,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               />
               <button
                 onClick={handleSaveGroqKey}
-                disabled={groqSaving || !groqKey.trim()}
-                className="px-4 py-2 bg-orange-500 text-white text-sm font-semibold rounded-lg hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="px-4 py-2 bg-orange-500 text-white text-sm font-semibold rounded-lg hover:bg-orange-600 transition-colors"
               >
-                {groqSaving ? "Saving..." : "Save"}
+                Save
               </button>
             </div>
             <p className="text-xs text-gray-500">
@@ -216,10 +177,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               />
               <button
                 onClick={handleSaveGeminiKey}
-                disabled={geminiSaving || !geminiKey.trim()}
-                className="px-4 py-2 bg-blue-500 text-white text-sm font-semibold rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="px-4 py-2 bg-blue-500 text-white text-sm font-semibold rounded-lg hover:bg-blue-600 transition-colors"
               >
-                {geminiSaving ? "Saving..." : "Save"}
+                Save
               </button>
             </div>
             <p className="text-xs text-gray-500">
@@ -232,24 +192,6 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               >
                 aistudio.google.com
               </a>
-            </p>
-          </div>
-
-          {/* Admin Token */}
-          <div className="space-y-3">
-            <label className="text-sm font-semibold text-gray-700">Admin Token</label>
-            <input
-              type="password"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gray-500 focus:border-transparent"
-              value={adminToken}
-              onChange={(e) => {
-                setAdminToken(e.target.value);
-                localStorage.setItem("adminToken", e.target.value);
-              }}
-              placeholder="Only needed if the server sets ADMIN_TOKEN"
-            />
-            <p className="text-xs text-gray-500">
-              Sent with key updates when the deployment requires admin auth.
             </p>
           </div>
 
@@ -318,7 +260,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         {/* Footer */}
         <div className="px-6 py-4 bg-gray-50 border-t border-gray-200">
           <p className="text-xs text-gray-500 text-center">
-            API keys are stored securely and used only for game processing.
+            Your API keys stay in this browser and are sent only with the matches you start.
           </p>
         </div>
       </div>

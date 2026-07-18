@@ -180,32 +180,22 @@ export default function Home() {
       return;
     }
 
-    // Check which API keys are needed
+    // Bring-your-own-key: keys live only in this browser (Settings modal writes
+    // them to localStorage) and are sent with this match's start request.
     const needsGroq = whiteModel.provider === "groq" || blackModel.provider === "groq";
     const needsGemini = whiteModel.provider === "google" || blackModel.provider === "google";
+    const groqApiKey = localStorage.getItem("groqApiKey")?.trim() || "";
+    const geminiApiKey = localStorage.getItem("geminiApiKey")?.trim() || "";
 
-    // Check if required API keys are set
-    if (needsGroq || needsGemini) {
-      try {
-        const keysRes = await fetch("/api/tournament/api-keys");
-        if (keysRes.ok) {
-          const keys = await keysRes.json();
-          
-          if (needsGroq && !keys.groqApiKey) {
-            openSettings();
-            setStartError("Groq API key is required for the selected models. Please add it in Settings.");
-            return;
-          }
-          
-          if (needsGemini && !keys.geminiApiKey) {
-            openSettings();
-            setStartError("Gemini API key is required for the selected models. Please add it in Settings.");
-            return;
-          }
-        }
-      } catch {
-        // If check fails, proceed anyway (keys might be in env)
-      }
+    if (needsGroq && !groqApiKey) {
+      openSettings();
+      setStartError("Groq API key is required for the selected models. Add your key in Settings.");
+      return;
+    }
+    if (needsGemini && !geminiApiKey) {
+      openSettings();
+      setStartError("Gemini API key is required for the selected models. Add your key in Settings.");
+      return;
     }
 
     setStarting(true);
@@ -230,10 +220,12 @@ export default function Home() {
       const res = await fetch("/api/games/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           modelIds: [whiteModelId, blackModelId],
           whiteMode,
           blackMode,
+          ...(needsGroq && groqApiKey ? { groqApiKey } : {}),
+          ...(needsGemini && geminiApiKey ? { geminiApiKey } : {}),
         }),
       });
 
